@@ -521,5 +521,59 @@ class TestSQLiteBackendErrorHandling:
         backend.rollback()
 
 
+class TestValidateConnection:
+    """Tests for _validate_connection method."""
+
+    @pytest.mark.asyncio
+    async def test_validate_connection_when_connected(self, tmp_path):
+        """Test validation returns True for valid connection."""
+        backend = SQLiteFallbackBackend(db_path=str(tmp_path / "test.db"))
+        await backend.connect()
+
+        assert backend._validate_connection() is True
+
+        await backend.disconnect()
+
+    def test_validate_connection_when_not_connected(self, tmp_path):
+        """Test validation returns False when not connected."""
+        backend = SQLiteFallbackBackend(db_path=str(tmp_path / "test.db"))
+
+        assert backend._validate_connection() is False
+
+    @pytest.mark.asyncio
+    async def test_validate_connection_after_disconnect(self, tmp_path):
+        """Test validation returns False after disconnect."""
+        backend = SQLiteFallbackBackend(db_path=str(tmp_path / "test.db"))
+        await backend.connect()
+        await backend.disconnect()
+
+        assert backend._validate_connection() is False
+
+    @pytest.mark.asyncio
+    async def test_execute_sync_uses_validate_connection(self, tmp_path):
+        """Test that execute_sync validates connection before executing."""
+        backend = SQLiteFallbackBackend(db_path=str(tmp_path / "test.db"))
+
+        # Not connected - should raise error
+        with pytest.raises(DatabaseConnectionError, match="SQLite connection is not valid"):
+            backend.execute_sync("SELECT 1")
+
+    @pytest.mark.asyncio
+    async def test_validate_connection_with_closed_connection(self, tmp_path):
+        """Test validation when connection exists but is closed."""
+        backend = SQLiteFallbackBackend(db_path=str(tmp_path / "test.db"))
+        await backend.connect()
+
+        # Close the connection manually (simulate closed connection)
+        backend.conn.close()
+
+        # Should return False because connection is closed
+        assert backend._validate_connection() is False
+
+        # Reset backend state for cleanup
+        backend.conn = None
+        backend._connected = False
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

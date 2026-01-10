@@ -205,7 +205,10 @@ class CloudRESTAdapter(GraphBackend):
 
         self._client: Optional[httpx.AsyncClient] = None
         self._connected = False
-        self._circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60.0)
+        self._circuit_breaker = CircuitBreaker(
+            failure_threshold=Config.CLOUD_CIRCUIT_BREAKER_THRESHOLD,
+            recovery_timeout=Config.CLOUD_CIRCUIT_BREAKER_TIMEOUT
+        )
 
     def _get_headers(self) -> dict[str, str]:
         """Get headers for API requests."""

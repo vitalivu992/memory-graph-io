@@ -10,6 +10,7 @@ Tests cover:
 - Retry logic
 """
 
+import asyncio
 import pytest
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -22,6 +23,7 @@ from memorygraph.backends.cloud_backend import (
     AuthenticationError,
     UsageLimitExceeded,
     RateLimitExceeded,
+    _mask_sensitive,
 )
 from memorygraph.models import (
     Memory, MemoryType, MemoryContext, Relationship,
@@ -676,3 +678,105 @@ class TestCloudRESTAdapterPayloadConversion:
 
         # Should return None on error
         assert memory is None
+
+
+class TestCircuitBreakerConcurrency:
+    """Tests for CircuitBreaker async lock and concurrent access."""
+
+    @pytest.mark.asyncio
+    async def test_concurrent_failures_increment_correctly(self):
+        """Test that concurrent record_failure calls increment counter correctly."""
+        from memorygraph.backends.cloud_backend import CircuitBreaker
+
+        cb = CircuitBreaker(failure_threshold=100, recovery_timeout=60.0)
+
+        # Make 50 concurrent failure recordings
+        await asyncio.gather(*[cb.record_failure() for _ in range(50)])
+
+        assert cb.failure_count == 50
+
+    @pytest.mark.asyncio
+    async def test_concurrent_successes_reset_correctly(self):
+        """Test that concurrent record_success calls work correctly."""
+        from memorygraph.backends.cloud_backend import CircuitBreaker
+
+        cb = CircuitBreaker(failure_threshold=5, recovery_timeout=60.0)
+
+        # Record some failures first
+        for _ in range(3):
+            await cb.record_failure()
+
+        # Concurrent successes should all reset
+        await asyncio.gather(*[cb.record_success() for _ in range(10)])
+
+        assert cb.failure_count == 0
+        assert cb.state == "closed"
+
+    @pytest.mark.asyncio
+    async def test_state_transition_under_concurrent_load(self):
+        """Test state transitions are atomic under concurrent access."""
+        from memorygraph.backends.cloud_backend import CircuitBreaker
+
+        cb = CircuitBreaker(failure_threshold=5, recovery_timeout=0.1)
+
+        # Concurrent failures should trigger state change exactly once
+        await asyncio.gather(*[cb.record_failure() for _ in range(10)])
+
+        assert cb.state == "open"
+        assert cb.failure_count == 10
+
+    @pytest.mark.asyncio
+    async def test_can_execute_consistent_during_transitions(self):
+        """Test can_execute returns consistent results during state changes."""
+        from memorygraph.backends.cloud_backend import CircuitBreaker
+
+        cb = CircuitBreaker(failure_threshold=5, recovery_timeout=60.0)
+
+        # Initially should be able to execute
+        results = await asyncio.gather(*[cb.can_execute() for _ in range(10)])
+        assert all(results)
+
+        # After failures, should not be able to execute
+        for _ in range(5):
+            await cb.record_failure()
+
+        results = await asyncio.gather(*[cb.can_execute() for _ in range(10)])
+        assert not any(results)
+
+
+class TestMaskSensitive:
+    """Tests for _mask_sensitive utility function."""
+
+    def test_normal_masking(self):
+        """Test normal string is masked correctly."""
+        result = _mask_sensitive("mg_abcdefghij")
+
+        assert result == "mg_a*********"
+        assert result.startswith("mg_a")
+        assert "abcdefghij" not in result
+
+    def test_short_value_fully_masked(self):
+        """Test short values are fully masked."""
+        result = _mask_sensitive("abc")
+        assert result == "***"
+
+    def test_empty_string(self):
+        """Test empty string returns mask."""
+        result = _mask_sensitive("")
+        assert result == "***"
+
+    def test_custom_visible_chars(self):
+        """Test custom visible_chars parameter."""
+        result = _mask_sensitive("mg_abcdefghij", visible_chars=6)
+        assert result == "mg_abc*******"
+
+    def test_exactly_visible_chars_length(self):
+        """Test value exactly equal to visible_chars."""
+        result = _mask_sensitive("abcd", visible_chars=4)
+        assert result == "***"
+
+    def test_one_char_longer_than_visible(self):
+        """Test value one char longer than visible_chars."""
+        result = _mask_sensitive("abcde", visible_chars=4)
+        assert result == "abcd*"
+        assert len(result) == 5
