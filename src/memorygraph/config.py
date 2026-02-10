@@ -3,6 +3,10 @@ Configuration management for MemoryGraph.
 
 This module centralizes all configuration options and environment variable handling
 for the multi-backend memory server.
+
+Config attributes are dynamic descriptors that read environment variables on each
+access. This ensures tests using patch.dict(os.environ) and direct Config attribute
+overrides both work correctly.
 """
 
 import os
@@ -60,9 +64,65 @@ TOOL_PROFILES = {
 }
 
 
+class _EnvVar:
+    """Descriptor that reads environment variables dynamically on each access.
+
+    When accessed as a class attribute (e.g., Config.BACKEND), invokes __get__
+    which reads from os.environ at call time. This makes Config reactive to
+    env var changes (e.g., via patch.dict(os.environ) in tests).
+
+    Direct assignment (e.g., Config.BACKEND = "neo4j") replaces the descriptor
+    with a static value, which is useful for tests that patch Config directly.
+    """
+
+    def __init__(self, *env_names: str, default: object = None, cast: object = None):
+        """
+        Args:
+            env_names: Environment variable names to check in priority order.
+                       Uses truthy check (matching Python's ``or`` chaining):
+                       None and empty strings fall through to the next name.
+            default: Default value if no env var is set (already the final type).
+            cast: Optional type converter (int, float). Use bool for
+                  "true"/"false" string parsing.
+        """
+        self.env_names = env_names
+        self.default = default
+        self.cast = cast
+
+    def __get__(self, obj: object, objtype: type = None) -> object:
+        for name in self.env_names:
+            val = os.getenv(name)
+            if val:
+                return self._convert(val)
+        return self.default
+
+    def _convert(self, val: str) -> object:
+        if self.cast is None:
+            return val
+        if self.cast is bool:
+            return val.lower() == "true"
+        return self.cast(val)  # type: ignore[operator]
+
+    def __repr__(self) -> str:
+        return f"_EnvVar({', '.join(repr(n) for n in self.env_names)}, default={self.default!r})"
+
+
+# Pre-compute default paths once (home directory doesn't change during process)
+_DEFAULT_DB_PATH = os.path.expanduser("~/.memorygraph/memory.db")
+_DEFAULT_FALKORDBLITE_PATH = os.path.expanduser("~/.memorygraph/falkordblite.db")
+_DEFAULT_LADYBUGDB_PATH = os.path.expanduser("~/.memorygraph/ladybugdb.db")
+
+
 class Config:
     """
     Configuration class for the memory server.
+
+    All attributes are dynamic descriptors that read from environment variables
+    on each access. This makes Config the single source of truth for configuration
+    while remaining reactive to runtime env var changes.
+
+    Attributes can be overridden via direct assignment (e.g., Config.BACKEND = "neo4j")
+    for testing or programmatic configuration.
 
     Environment Variables:
         MEMORY_BACKEND: Backend type (neo4j|memgraph|sqlite|turso|cloud|falkordb|falkordblite|auto) [default: sqlite]
@@ -111,76 +171,76 @@ class Config:
     """
 
     # Backend Selection
-    BACKEND: str = os.getenv("MEMORY_BACKEND", "sqlite")
+    BACKEND = _EnvVar("MEMORY_BACKEND", default="sqlite")
 
     # Neo4j Configuration
-    NEO4J_URI: str = os.getenv("MEMORY_NEO4J_URI") or os.getenv("NEO4J_URI", "bolt://localhost:7687")
-    NEO4J_USER: str = os.getenv("MEMORY_NEO4J_USER") or os.getenv("NEO4J_USER", "neo4j")
-    NEO4J_PASSWORD: Optional[str] = os.getenv("MEMORY_NEO4J_PASSWORD") or os.getenv("NEO4J_PASSWORD")
-    NEO4J_DATABASE: str = os.getenv("MEMORY_NEO4J_DATABASE", "neo4j")
+    NEO4J_URI = _EnvVar("MEMORY_NEO4J_URI", "NEO4J_URI", default="bolt://localhost:7687")
+    NEO4J_USER = _EnvVar("MEMORY_NEO4J_USER", "NEO4J_USER", default="neo4j")
+    NEO4J_PASSWORD = _EnvVar("MEMORY_NEO4J_PASSWORD", "NEO4J_PASSWORD", default=None)
+    NEO4J_DATABASE = _EnvVar("MEMORY_NEO4J_DATABASE", default="neo4j")
 
     # Memgraph Configuration
-    MEMGRAPH_URI: str = os.getenv("MEMORY_MEMGRAPH_URI", "bolt://localhost:7687")
-    MEMGRAPH_USER: str = os.getenv("MEMORY_MEMGRAPH_USER", "")
-    MEMGRAPH_PASSWORD: str = os.getenv("MEMORY_MEMGRAPH_PASSWORD", "")
+    MEMGRAPH_URI = _EnvVar("MEMORY_MEMGRAPH_URI", default="bolt://localhost:7687")
+    MEMGRAPH_USER = _EnvVar("MEMORY_MEMGRAPH_USER", default="")
+    MEMGRAPH_PASSWORD = _EnvVar("MEMORY_MEMGRAPH_PASSWORD", default="")
 
     # SQLite Configuration
-    SQLITE_PATH: str = os.getenv("MEMORY_SQLITE_PATH", os.path.expanduser("~/.memorygraph/memory.db"))
+    SQLITE_PATH = _EnvVar("MEMORY_SQLITE_PATH", default=_DEFAULT_DB_PATH)
 
     # Turso Configuration
-    TURSO_PATH: str = os.getenv("MEMORY_TURSO_PATH", os.path.expanduser("~/.memorygraph/memory.db"))
-    TURSO_DATABASE_URL: Optional[str] = os.getenv("TURSO_DATABASE_URL")
-    TURSO_AUTH_TOKEN: Optional[str] = os.getenv("TURSO_AUTH_TOKEN")
+    TURSO_PATH = _EnvVar("MEMORY_TURSO_PATH", default=_DEFAULT_DB_PATH)
+    TURSO_DATABASE_URL = _EnvVar("TURSO_DATABASE_URL", default=None)
+    TURSO_AUTH_TOKEN = _EnvVar("TURSO_AUTH_TOKEN", default=None)
 
     # Cloud Configuration
-    MEMORYGRAPH_API_KEY: Optional[str] = os.getenv("MEMORYGRAPH_API_KEY")
-    MEMORYGRAPH_API_URL: str = os.getenv("MEMORYGRAPH_API_URL", "https://graph-api.memorygraph.dev")
-    MEMORYGRAPH_TIMEOUT: int = int(os.getenv("MEMORYGRAPH_TIMEOUT", "30"))
+    MEMORYGRAPH_API_KEY = _EnvVar("MEMORYGRAPH_API_KEY", default=None)
+    MEMORYGRAPH_API_URL = _EnvVar("MEMORYGRAPH_API_URL", default="https://graph-api.memorygraph.dev")
+    MEMORYGRAPH_TIMEOUT = _EnvVar("MEMORYGRAPH_TIMEOUT", default=30, cast=int)
 
     # Cloud Backend Retry Configuration
-    CLOUD_MAX_RETRIES: int = int(os.getenv("MEMORYGRAPH_MAX_RETRIES", "3"))
-    CLOUD_RETRY_BACKOFF_BASE: float = float(os.getenv("MEMORYGRAPH_RETRY_BACKOFF", "1.0"))
-    CLOUD_CIRCUIT_BREAKER_THRESHOLD: int = int(os.getenv("MEMORYGRAPH_CB_THRESHOLD", "5"))
-    CLOUD_CIRCUIT_BREAKER_TIMEOUT: float = float(os.getenv("MEMORYGRAPH_CB_TIMEOUT", "60.0"))
+    CLOUD_MAX_RETRIES = _EnvVar("MEMORYGRAPH_MAX_RETRIES", default=3, cast=int)
+    CLOUD_RETRY_BACKOFF_BASE = _EnvVar("MEMORYGRAPH_RETRY_BACKOFF", default=1.0, cast=float)
+    CLOUD_CIRCUIT_BREAKER_THRESHOLD = _EnvVar("MEMORYGRAPH_CB_THRESHOLD", default=5, cast=int)
+    CLOUD_CIRCUIT_BREAKER_TIMEOUT = _EnvVar("MEMORYGRAPH_CB_TIMEOUT", default=60.0, cast=float)
 
     # FalkorDB Configuration
-    FALKORDB_HOST: str = os.getenv("MEMORY_FALKORDB_HOST") or os.getenv("FALKORDB_HOST", "localhost")
-    FALKORDB_PORT: int = int(port_str) if (port_str := os.getenv("MEMORY_FALKORDB_PORT") or os.getenv("FALKORDB_PORT")) else 6379
-    FALKORDB_PASSWORD: Optional[str] = os.getenv("MEMORY_FALKORDB_PASSWORD") or os.getenv("FALKORDB_PASSWORD")
+    FALKORDB_HOST = _EnvVar("MEMORY_FALKORDB_HOST", "FALKORDB_HOST", default="localhost")
+    FALKORDB_PORT = _EnvVar("MEMORY_FALKORDB_PORT", "FALKORDB_PORT", default=6379, cast=int)
+    FALKORDB_PASSWORD = _EnvVar("MEMORY_FALKORDB_PASSWORD", "FALKORDB_PASSWORD", default=None)
 
     # FalkorDBLite Configuration
-    FALKORDBLITE_PATH: str = os.getenv("MEMORY_FALKORDBLITE_PATH") or os.getenv("FALKORDBLITE_PATH") or os.path.expanduser("~/.memorygraph/falkordblite.db")
+    FALKORDBLITE_PATH = _EnvVar("MEMORY_FALKORDBLITE_PATH", "FALKORDBLITE_PATH", default=_DEFAULT_FALKORDBLITE_PATH)
 
     # LadybugDB Configuration
-    LADYBUGDB_PATH: str = os.getenv("MEMORY_LADYBUGDB_PATH") or os.getenv("LADYBUGDB_PATH") or os.path.expanduser("~/.memorygraph/ladybugdb.db")
+    LADYBUGDB_PATH = _EnvVar("MEMORY_LADYBUGDB_PATH", "LADYBUGDB_PATH", default=_DEFAULT_LADYBUGDB_PATH)
 
     # Tool Profile Configuration
-    TOOL_PROFILE: str = os.getenv("MEMORY_TOOL_PROFILE", "core")
+    TOOL_PROFILE = _EnvVar("MEMORY_TOOL_PROFILE", default="core")
 
     # Logging Configuration
-    LOG_LEVEL: str = os.getenv("MEMORY_LOG_LEVEL", "INFO")
+    LOG_LEVEL = _EnvVar("MEMORY_LOG_LEVEL", default="INFO")
 
     # Feature Flags
-    AUTO_EXTRACT_ENTITIES: bool = os.getenv("MEMORY_AUTO_EXTRACT_ENTITIES", "true").lower() == "true"
-    SESSION_BRIEFING: bool = os.getenv("MEMORY_SESSION_BRIEFING", "true").lower() == "true"
-    BRIEFING_VERBOSITY: str = os.getenv("MEMORY_BRIEFING_VERBOSITY", "standard")
-    BRIEFING_RECENCY_DAYS: int = int(os.getenv("MEMORY_BRIEFING_RECENCY_DAYS", "7"))
+    AUTO_EXTRACT_ENTITIES = _EnvVar("MEMORY_AUTO_EXTRACT_ENTITIES", default=True, cast=bool)
+    SESSION_BRIEFING = _EnvVar("MEMORY_SESSION_BRIEFING", default=True, cast=bool)
+    BRIEFING_VERBOSITY = _EnvVar("MEMORY_BRIEFING_VERBOSITY", default="standard")
+    BRIEFING_RECENCY_DAYS = _EnvVar("MEMORY_BRIEFING_RECENCY_DAYS", default=7, cast=int)
 
     # Relationship Configuration
-    ALLOW_RELATIONSHIP_CYCLES: bool = os.getenv("MEMORY_ALLOW_CYCLES", "false").lower() == "true"
+    ALLOW_RELATIONSHIP_CYCLES = _EnvVar("MEMORY_ALLOW_CYCLES", default=False, cast=bool)
 
     # Multi-Tenancy Configuration (Phase 1)
-    MULTI_TENANT_MODE: bool = os.getenv("MEMORY_MULTI_TENANT_MODE", "false").lower() == "true"
-    DEFAULT_TENANT: str = os.getenv("MEMORY_DEFAULT_TENANT", "default")
-    REQUIRE_AUTH: bool = os.getenv("MEMORY_REQUIRE_AUTH", "false").lower() == "true"
+    MULTI_TENANT_MODE = _EnvVar("MEMORY_MULTI_TENANT_MODE", default=False, cast=bool)
+    DEFAULT_TENANT = _EnvVar("MEMORY_DEFAULT_TENANT", default="default")
+    REQUIRE_AUTH = _EnvVar("MEMORY_REQUIRE_AUTH", default=False, cast=bool)
 
     # Authentication Configuration (Future Phase 3)
-    AUTH_PROVIDER: str = os.getenv("MEMORY_AUTH_PROVIDER", "none")
-    JWT_SECRET: Optional[str] = os.getenv("MEMORY_JWT_SECRET")
-    JWT_ALGORITHM: str = os.getenv("MEMORY_JWT_ALGORITHM", "HS256")
+    AUTH_PROVIDER = _EnvVar("MEMORY_AUTH_PROVIDER", default="none")
+    JWT_SECRET = _EnvVar("MEMORY_JWT_SECRET", default=None)
+    JWT_ALGORITHM = _EnvVar("MEMORY_JWT_ALGORITHM", default="HS256")
 
     # Audit Configuration (Future Phase 4)
-    ENABLE_AUDIT_LOG: bool = os.getenv("MEMORY_ENABLE_AUDIT_LOG", "false").lower() == "true"
+    ENABLE_AUDIT_LOG = _EnvVar("MEMORY_ENABLE_AUDIT_LOG", default=False, cast=bool)
 
     @classmethod
     def get_backend_type(cls) -> BackendType:

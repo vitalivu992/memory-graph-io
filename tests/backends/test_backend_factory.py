@@ -164,7 +164,7 @@ class TestBackendFactoryHelpers:
             assert BackendFactory.get_configured_backend_type() == "neo4j"
 
         with patch.dict(os.environ, {}, clear=True):
-            assert BackendFactory.get_configured_backend_type() == "auto"
+            assert BackendFactory.get_configured_backend_type() == "sqlite"
 
     def test_is_backend_configured_neo4j(self):
         """Test checking if Neo4j is configured."""
@@ -175,12 +175,17 @@ class TestBackendFactoryHelpers:
             assert BackendFactory.is_backend_configured("neo4j") is False
 
     def test_is_backend_configured_memgraph(self):
-        """Test checking if Memgraph is configured."""
+        """Test checking if Memgraph is configured.
+
+        Note: Memgraph has a default URI (bolt://localhost:7687), so
+        is_backend_configured always returns True when Config has a default.
+        """
         with patch.dict(os.environ, {"MEMORY_MEMGRAPH_URI": "bolt://test:7687"}):
             assert BackendFactory.is_backend_configured("memgraph") is True
 
         with patch.dict(os.environ, {}, clear=True):
-            assert BackendFactory.is_backend_configured("memgraph") is False
+            # Default URI "bolt://localhost:7687" is truthy
+            assert BackendFactory.is_backend_configured("memgraph") is True
 
     def test_is_backend_configured_sqlite(self):
         """Test checking if SQLite is configured (always True)."""

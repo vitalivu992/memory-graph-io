@@ -34,23 +34,16 @@ from memorygraph.migration.models import BackendConfig
 
 @contextmanager
 def patch_config(**kwargs):
-    """
-    Context manager to temporarily patch Config attributes.
+    """Context manager to temporarily patch Config class attributes.
 
-    Usage:
-        with patch_config(BACKEND="neo4j", NEO4J_URI="bolt://test:7687"):
-            config = BackendConfig.from_env()
-            assert config.backend_type == BackendType.NEO4J
-
-    Args:
-        **kwargs: Config attributes to patch (e.g., BACKEND="neo4j")
+    Saves raw class dict entries (including _EnvVar descriptors) so that
+    dynamic env var resolution is restored on exit.
     """
     original_values = {}
     for key, value in kwargs.items():
-        if hasattr(Config, key):
-            original_values[key] = getattr(Config, key)
+        if key in Config.__dict__:
+            original_values[key] = Config.__dict__[key]
         setattr(Config, key, value)
-
     try:
         yield
     finally:

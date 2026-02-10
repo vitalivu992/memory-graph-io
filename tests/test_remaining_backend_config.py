@@ -29,19 +29,16 @@ from src.memorygraph.database import Neo4jConnection
 
 @contextmanager
 def patch_config(**kwargs):
-    """
-    Context manager to temporarily patch Config class attributes.
+    """Context manager to temporarily patch Config class attributes.
 
-    Usage:
-        with patch_config(FALKORDB_HOST="config-host"):
-            backend = FalkorDBBackend()
-            assert backend.host == "config-host"
+    Saves raw class dict entries (including _EnvVar descriptors) so that
+    dynamic env var resolution is restored on exit.
     """
     original_values = {}
     for key, value in kwargs.items():
-        if hasattr(Config, key):
-            original_values[key] = getattr(Config, key)
-            setattr(Config, key, value)
+        if key in Config.__dict__:
+            original_values[key] = Config.__dict__[key]
+        setattr(Config, key, value)
     try:
         yield
     finally:

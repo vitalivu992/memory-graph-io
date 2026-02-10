@@ -154,7 +154,7 @@ class TestMemgraphBackendConnection:
 
             backend = MemgraphBackend(uri="bolt://test:7687")
 
-            with pytest.raises(DatabaseConnectionError, match="Unexpected error connecting to Memgraph"):
+            with pytest.raises(DatabaseConnectionError, match="Failed to connect to Memgraph"):
                 await backend.connect()
 
             assert backend._connected is False
@@ -170,7 +170,7 @@ class TestMemgraphBackendConnection:
 
             backend = MemgraphBackend(uri="bolt://test:7687", user="test", password="wrong")
 
-            with pytest.raises(DatabaseConnectionError, match="Unexpected error connecting to Memgraph"):
+            with pytest.raises(DatabaseConnectionError, match="Authentication failed for Memgraph"):
                 await backend.connect()
 
     @pytest.mark.asyncio

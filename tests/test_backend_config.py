@@ -51,11 +51,15 @@ def patch_config(**kwargs):
 
     Args:
         **kwargs: Config attributes to patch (e.g., NEO4J_URI="value")
+
+    Note:
+        Saves raw class dict entries (including _EnvVar descriptors) so that
+        dynamic env var resolution is restored on exit.
     """
     original_values = {}
     for key, value in kwargs.items():
-        if hasattr(Config, key):
-            original_values[key] = getattr(Config, key)
+        if key in Config.__dict__:
+            original_values[key] = Config.__dict__[key]
         setattr(Config, key, value)
 
     try:

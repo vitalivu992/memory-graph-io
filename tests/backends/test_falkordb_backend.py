@@ -3,6 +3,11 @@ Unit tests for FalkorDB backend implementation.
 
 These tests use mocked FalkorDB client to verify backend logic without
 requiring a running FalkorDB instance.
+
+Mock results use the real FalkorDB response format:
+  - result.header: list of [ColumnType, column_name] pairs
+  - result.result_set: list of lists (rows of column values)
+  - Node objects have a .properties dict
 """
 
 import pytest
@@ -25,6 +30,29 @@ from memorygraph.models import (
     ValidationError,
     RelationshipError,
 )
+
+
+def _make_node(properties: dict) -> Mock:
+    """Create a mock FalkorDB Node with a properties dict."""
+    node = Mock()
+    node.properties = properties
+    return node
+
+
+def _make_result(header_names: list, rows: list) -> Mock:
+    """
+    Create a mock FalkorDB QueryResult matching the real format.
+
+    Args:
+        header_names: List of column name strings (e.g., ["id", "m"])
+        rows: List of lists, each inner list is a row of values
+    """
+    result = Mock()
+    # FalkorDB header format: [[ColumnType, column_name], ...]
+    # ColumnType is an int constant; we use 1 as a placeholder
+    result.header = [[1, name] for name in header_names]
+    result.result_set = rows
+    return result
 
 
 class TestFalkorDBConnection:
@@ -94,13 +122,15 @@ class TestFalkorDBQuery:
     """Test FalkorDB query execution."""
 
     @pytest.mark.asyncio
-    async def test_execute_query_read(self):
-        """Test executing a read query."""
+    async def test_execute_query_read_with_node(self):
+        """Test executing a read query that returns a Node."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
-            mock_result = Mock()
-            mock_result.result_set = [{"n": {"id": "123", "title": "Test"}}]
+
+            # Real FalkorDB format: header + list-of-lists with Node objects
+            node = _make_node({"id": "123", "title": "Test"})
+            mock_result = _make_result(["n"], [[node]])
             mock_graph.query.return_value = mock_result
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
@@ -118,13 +148,14 @@ class TestFalkorDBQuery:
             assert result[0]["n"]["id"] == "123"
 
     @pytest.mark.asyncio
-    async def test_execute_query_write(self):
-        """Test executing a write query."""
+    async def test_execute_query_write_with_scalar(self):
+        """Test executing a write query that returns scalar values."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
-            mock_result = Mock()
-            mock_result.result_set = [{"id": "456"}]
+
+            # Real FalkorDB format: scalar return
+            mock_result = _make_result(["id"], [["456"]])
             mock_graph.query.return_value = mock_result
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
@@ -148,6 +179,32 @@ class TestFalkorDBQuery:
 
         with pytest.raises(DatabaseConnectionError, match="(?i)not connected"):
             await backend.execute_query("MATCH (n) RETURN n")
+
+    @pytest.mark.asyncio
+    async def test_execute_query_dict_passthrough(self):
+        """Test that dict results (if client returns them) pass through unchanged."""
+        with patch('falkordb.FalkorDB') as mock_falkordb_class:
+            mock_client = Mock()
+            mock_graph = Mock()
+
+            # Some client versions might return dicts directly
+            mock_result = Mock()
+            mock_result.header = [[1, "id"]]
+            mock_result.result_set = [{"id": "789"}]
+            mock_graph.query.return_value = mock_result
+            mock_client.select_graph.return_value = mock_graph
+            mock_falkordb_class.return_value = mock_client
+
+            backend = FalkorDBBackend(host='localhost', port=6379)
+            await backend.connect()
+
+            result = await backend.execute_query(
+                "RETURN 'test' as id",
+                write=False
+            )
+
+            assert len(result) == 1
+            assert result[0]["id"] == "789"
 
 
 class TestFalkorDBSchema:
@@ -196,8 +253,9 @@ class TestFalkorDBMemoryOperations:
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
-            mock_result = Mock()
-            mock_result.result_set = [{"id": sample_memory.id}]
+
+            # Real format: scalar return "RETURN m.id as id"
+            mock_result = _make_result(["id"], [[sample_memory.id]])
             mock_graph.query.return_value = mock_result
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
@@ -205,7 +263,6 @@ class TestFalkorDBMemoryOperations:
             backend = FalkorDBBackend(host='localhost', port=6379)
             await backend.connect()
 
-            # This will fail until we implement the backend
             memory_id = await backend.store_memory(sample_memory)
 
             assert memory_id == sample_memory.id
@@ -217,23 +274,21 @@ class TestFalkorDBMemoryOperations:
             mock_client = Mock()
             mock_graph = Mock()
 
-            # Mock the query result
-            mock_result = Mock()
-            mock_result.result_set = [{
-                "m": {
-                    "id": sample_memory.id,
-                    "type": "solution",
-                    "title": "Redis Timeout Fix",
-                    "content": "Increased connection timeout to 5000ms",
-                    "summary": None,
-                    "tags": ["redis", "timeout", "performance"],
-                    "importance": 0.8,
-                    "confidence": 0.9,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                    "usage_count": 0
-                }
-            }]
+            # Real format: Node return "RETURN m"
+            node = _make_node({
+                "id": sample_memory.id,
+                "type": "solution",
+                "title": "Redis Timeout Fix",
+                "content": "Increased connection timeout to 5000ms",
+                "summary": None,
+                "tags": ["redis", "timeout", "performance"],
+                "importance": 0.8,
+                "confidence": 0.9,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "usage_count": 0
+            })
+            mock_result = _make_result(["m"], [[node]])
             mock_graph.query.return_value = mock_result
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
@@ -255,6 +310,7 @@ class TestFalkorDBMemoryOperations:
             mock_graph = Mock()
             mock_result = Mock()
             mock_result.result_set = []
+            mock_result.header = []
             mock_graph.query.return_value = mock_result
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
@@ -272,8 +328,9 @@ class TestFalkorDBMemoryOperations:
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
-            mock_result = Mock()
-            mock_result.result_set = [{"id": sample_memory.id}]
+
+            # Real format: scalar return "RETURN m.id as id"
+            mock_result = _make_result(["id"], [[sample_memory.id]])
             mock_graph.query.return_value = mock_result
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
@@ -292,8 +349,9 @@ class TestFalkorDBMemoryOperations:
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
-            mock_result = Mock()
-            mock_result.result_set = [{"deleted_count": 1}]
+
+            # Real format: scalar return "RETURN COUNT(m) as deleted_count"
+            mock_result = _make_result(["deleted_count"], [[1]])
             mock_graph.query.return_value = mock_result
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
@@ -315,9 +373,10 @@ class TestFalkorDBRelationships:
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
-            mock_result = Mock()
             rel_id = str(uuid.uuid4())
-            mock_result.result_set = [{"id": rel_id}]
+
+            # Real format: scalar return "RETURN r.id as id"
+            mock_result = _make_result(["id"], [[rel_id]])
             mock_graph.query.return_value = mock_result
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
@@ -341,27 +400,30 @@ class TestFalkorDBRelationships:
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
-            mock_result = Mock()
-            mock_result.result_set = [{
-                "related": {
-                    "id": "mem2",
-                    "type": "solution",
-                    "title": "Related Memory",
-                    "content": "Content",
-                    "tags": [],
-                    "importance": 0.7,
-                    "confidence": 0.8,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                    "usage_count": 0
-                },
-                "rel_type": "SOLVES",
-                "rel_props": {
-                    "strength": 0.9,
-                    "confidence": 0.8,
-                    "context": "Test context"
-                }
-            }]
+
+            # Real format: Node + scalars
+            # "RETURN related, type(rel) as rel_type, properties(rel) as rel_props"
+            related_node = _make_node({
+                "id": "mem2",
+                "type": "solution",
+                "title": "Related Memory",
+                "content": "Content",
+                "tags": [],
+                "importance": 0.7,
+                "confidence": 0.8,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "usage_count": 0
+            })
+            rel_props = {
+                "strength": 0.9,
+                "confidence": 0.8,
+                "context": "Test context"
+            }
+            mock_result = _make_result(
+                ["related", "rel_type", "rel_props"],
+                [[related_node, "SOLVES", rel_props]]
+            )
             mock_graph.query.return_value = mock_result
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
@@ -386,21 +448,21 @@ class TestFalkorDBSearch:
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
-            mock_result = Mock()
-            mock_result.result_set = [{
-                "m": {
-                    "id": "search1",
-                    "type": "solution",
-                    "title": "Redis Timeout",
-                    "content": "Fix for timeout",
-                    "tags": ["redis"],
-                    "importance": 0.8,
-                    "confidence": 0.9,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                    "usage_count": 0
-                }
-            }]
+
+            # Real format: Node return "RETURN m"
+            node = _make_node({
+                "id": "search1",
+                "type": "solution",
+                "title": "Redis Timeout",
+                "content": "Fix for timeout",
+                "tags": ["redis"],
+                "importance": 0.8,
+                "confidence": 0.9,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "usage_count": 0
+            })
+            mock_result = _make_result(["m"], [[node]])
             mock_graph.query.return_value = mock_result
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
@@ -413,7 +475,9 @@ class TestFalkorDBSearch:
 
             results = await backend.search_memories(query)
 
-            assert len(results) >= 0  # Will be implemented
+            assert len(results) == 1
+            assert results[0].id == "search1"
+            assert results[0].title == "Redis Timeout"
 
 
 class TestFalkorDBStatistics:
@@ -426,23 +490,28 @@ class TestFalkorDBStatistics:
             mock_client = Mock()
             mock_graph = Mock()
 
-            # Mock multiple query results for different statistics
+            # Mock multiple query results using real FalkorDB format
+            # Note: memories_by_type query contains both "m.type" AND "COUNT(m)",
+            # so check for "m.type" first to avoid false match on COUNT(m)
             def mock_query_side_effect(query, params=None):
-                result = Mock()
-                if "COUNT(m)" in query:
-                    result.result_set = [{"count": 42}]
-                elif "m.type" in query and "GROUP BY" in query:
-                    result.result_set = [
-                        {"type": "solution", "count": 20},
-                        {"type": "problem", "count": 15}
-                    ]
+                if "m.type" in query:
+                    return _make_result(
+                        ["type", "count"],
+                        [["solution", 20], ["problem", 15]]
+                    )
+                elif "COUNT(m)" in query:
+                    return _make_result(["count"], [[42]])
                 elif "COUNT(r)" in query:
-                    result.result_set = [{"count": 30}]
+                    return _make_result(["count"], [[30]])
                 elif "AVG(m.importance)" in query:
-                    result.result_set = [{"avg_importance": 0.75}]
+                    return _make_result(["avg_importance"], [[0.75]])
+                elif "AVG(m.confidence)" in query:
+                    return _make_result(["avg_confidence"], [[0.85]])
                 else:
+                    result = Mock()
                     result.result_set = []
-                return result
+                    result.header = []
+                    return result
 
             mock_graph.query.side_effect = mock_query_side_effect
             mock_client.select_graph.return_value = mock_graph
@@ -455,6 +524,7 @@ class TestFalkorDBStatistics:
 
             assert "total_memories" in stats
             assert "memories_by_type" in stats
+            assert stats["memories_by_type"]["solution"] == 20
 
 
 class TestFalkorDBHealthCheck:
@@ -466,8 +536,9 @@ class TestFalkorDBHealthCheck:
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
-            mock_result = Mock()
-            mock_result.result_set = [{"count": 10}]
+
+            # Real format: scalar return "RETURN count(m) as count"
+            mock_result = _make_result(["count"], [[10]])
             mock_graph.query.return_value = mock_result
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
@@ -479,6 +550,7 @@ class TestFalkorDBHealthCheck:
 
             assert health["connected"] is True
             assert health["backend_type"] == "falkordb"
+            assert health["statistics"]["memory_count"] == 10
 
     @pytest.mark.asyncio
     async def test_health_check_not_connected(self):
@@ -489,3 +561,24 @@ class TestFalkorDBHealthCheck:
 
         assert health["connected"] is False
         assert health["backend_type"] == "falkordb"
+
+
+class TestConvertFalkorDBValue:
+    """Test the _convert_falkordb_value helper."""
+
+    def test_node_conversion(self):
+        """Test that Node objects are converted to property dicts."""
+        node = _make_node({"id": "123", "title": "Test"})
+        result = FalkorDBBackend._convert_falkordb_value(node)
+        assert result == {"id": "123", "title": "Test"}
+
+    def test_scalar_passthrough(self):
+        """Test that scalar values pass through unchanged."""
+        assert FalkorDBBackend._convert_falkordb_value("hello") == "hello"
+        assert FalkorDBBackend._convert_falkordb_value(42) == 42
+        assert FalkorDBBackend._convert_falkordb_value(None) is None
+
+    def test_dict_passthrough(self):
+        """Test that plain dicts pass through unchanged."""
+        d = {"key": "value"}
+        assert FalkorDBBackend._convert_falkordb_value(d) == d

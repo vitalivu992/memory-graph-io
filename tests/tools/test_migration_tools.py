@@ -20,12 +20,16 @@ from src.memorygraph.config import Config
 
 @contextmanager
 def patch_config(**kwargs):
-    """Context manager to temporarily patch Config class attributes."""
+    """Context manager to temporarily patch Config class attributes.
+
+    Saves raw class dict entries (including _EnvVar descriptors) so that
+    dynamic env var resolution is restored on exit.
+    """
     original_values = {}
     for key, value in kwargs.items():
-        if hasattr(Config, key):
-            original_values[key] = getattr(Config, key)
-            setattr(Config, key, value)
+        if key in Config.__dict__:
+            original_values[key] = Config.__dict__[key]
+        setattr(Config, key, value)
     try:
         yield
     finally:

@@ -25,18 +25,16 @@ from memorygraph.config import Config
 
 @contextmanager
 def patch_config(**kwargs):
-    """
-    Context manager to temporarily patch Config class attributes.
+    """Context manager to temporarily patch Config class attributes.
 
-    Usage:
-        with patch_config(CLOUD_MAX_RETRIES=5):
-            assert Config.CLOUD_MAX_RETRIES == 5
+    Saves raw class dict entries (including _EnvVar descriptors) so that
+    dynamic env var resolution is restored on exit.
     """
     original_values = {}
     for key, value in kwargs.items():
-        if hasattr(Config, key):
-            original_values[key] = getattr(Config, key)
-            setattr(Config, key, value)
+        if key in Config.__dict__:
+            original_values[key] = Config.__dict__[key]
+        setattr(Config, key, value)
     try:
         yield
     finally:
@@ -207,40 +205,28 @@ class TestConfigValueValidation:
     """Tests for validating config value types and ranges."""
 
     def test_invalid_max_retries_int_conversion(self):
-        """Test that invalid MEMORYGRAPH_MAX_RETRIES raises ValueError."""
+        """Test that invalid MEMORYGRAPH_MAX_RETRIES raises ValueError on access."""
         with patch.dict(os.environ, {"MEMORYGRAPH_MAX_RETRIES": "not_a_number"}):
-            from importlib import reload
-            import memorygraph.config
-
             with pytest.raises(ValueError):
-                reload(memorygraph.config)
+                _ = Config.CLOUD_MAX_RETRIES
 
     def test_invalid_retry_backoff_float_conversion(self):
-        """Test that invalid MEMORYGRAPH_RETRY_BACKOFF raises ValueError."""
+        """Test that invalid MEMORYGRAPH_RETRY_BACKOFF raises ValueError on access."""
         with patch.dict(os.environ, {"MEMORYGRAPH_RETRY_BACKOFF": "not_a_float"}):
-            from importlib import reload
-            import memorygraph.config
-
             with pytest.raises(ValueError):
-                reload(memorygraph.config)
+                _ = Config.CLOUD_RETRY_BACKOFF_BASE
 
     def test_invalid_cb_threshold_int_conversion(self):
-        """Test that invalid MEMORYGRAPH_CB_THRESHOLD raises ValueError."""
+        """Test that invalid MEMORYGRAPH_CB_THRESHOLD raises ValueError on access."""
         with patch.dict(os.environ, {"MEMORYGRAPH_CB_THRESHOLD": "not_a_number"}):
-            from importlib import reload
-            import memorygraph.config
-
             with pytest.raises(ValueError):
-                reload(memorygraph.config)
+                _ = Config.CLOUD_CIRCUIT_BREAKER_THRESHOLD
 
     def test_invalid_cb_timeout_float_conversion(self):
-        """Test that invalid MEMORYGRAPH_CB_TIMEOUT raises ValueError."""
+        """Test that invalid MEMORYGRAPH_CB_TIMEOUT raises ValueError on access."""
         with patch.dict(os.environ, {"MEMORYGRAPH_CB_TIMEOUT": "not_a_float"}):
-            from importlib import reload
-            import memorygraph.config
-
             with pytest.raises(ValueError):
-                reload(memorygraph.config)
+                _ = Config.CLOUD_CIRCUIT_BREAKER_TIMEOUT
 
     def test_zero_values_are_valid(self):
         """Test that zero values are accepted for retry config."""

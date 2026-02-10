@@ -56,23 +56,20 @@ class TestFactoryReadsConfig:
 
     @pytest.fixture(autouse=True)
     def save_and_restore_config(self):
-        """Save and restore Config values around each test."""
-        # Save original Config values
+        """Save and restore Config values around each test.
+
+        Saves raw class dict entries (including _EnvVar descriptors) so that
+        dynamic env var resolution is restored on exit.
+        """
+        config_keys = [
+            "BACKEND", "NEO4J_URI", "NEO4J_USER", "NEO4J_PASSWORD",
+            "MEMGRAPH_URI", "MEMGRAPH_USER", "MEMGRAPH_PASSWORD",
+            "SQLITE_PATH", "TURSO_PATH", "TURSO_DATABASE_URL",
+            "TURSO_AUTH_TOKEN", "MEMORYGRAPH_API_KEY",
+            "MEMORYGRAPH_API_URL", "MEMORYGRAPH_TIMEOUT",
+        ]
         original_values = {
-            "BACKEND": Config.BACKEND,
-            "NEO4J_URI": Config.NEO4J_URI,
-            "NEO4J_USER": Config.NEO4J_USER,
-            "NEO4J_PASSWORD": Config.NEO4J_PASSWORD,
-            "MEMGRAPH_URI": Config.MEMGRAPH_URI,
-            "MEMGRAPH_USER": Config.MEMGRAPH_USER,
-            "MEMGRAPH_PASSWORD": Config.MEMGRAPH_PASSWORD,
-            "SQLITE_PATH": Config.SQLITE_PATH,
-            "TURSO_PATH": Config.TURSO_PATH,
-            "TURSO_DATABASE_URL": Config.TURSO_DATABASE_URL,
-            "TURSO_AUTH_TOKEN": Config.TURSO_AUTH_TOKEN,
-            "MEMORYGRAPH_API_KEY": Config.MEMORYGRAPH_API_KEY,
-            "MEMORYGRAPH_API_URL": Config.MEMORYGRAPH_API_URL,
-            "MEMORYGRAPH_TIMEOUT": Config.MEMORYGRAPH_TIMEOUT,
+            key: Config.__dict__[key] for key in config_keys if key in Config.__dict__
         }
 
         # Save original environment
@@ -80,7 +77,7 @@ class TestFactoryReadsConfig:
 
         yield
 
-        # Restore Config values
+        # Restore Config values (including descriptors)
         for key, value in original_values.items():
             setattr(Config, key, value)
 
@@ -381,23 +378,16 @@ class TestFactoryReadsConfig:
         os.environ.pop("MEMORY_NEO4J_PASSWORD", None)
         os.environ.pop("NEO4J_PASSWORD", None)
 
-        # Mock Neo4j backend to succeed
-        with patch("memorygraph.backends.factory.Neo4jBackend") as mock_backend_class:
-            mock_instance = AsyncMock()
-            mock_instance.connect = AsyncMock()
-            mock_backend_class.return_value = mock_instance
+        # Mock _create_neo4j to track if it's called
+        mock_instance = AsyncMock()
+        with patch.object(BackendFactory, "_create_neo4j", new_callable=AsyncMock) as mock_create:
+            mock_create.return_value = mock_instance
 
-            # Mock _create_neo4j to track if it's called
-            with patch.object(BackendFactory, "_create_neo4j", new_callable=AsyncMock) as mock_create:
-                mock_create.return_value = mock_instance
+            # Auto-select should try Neo4j because Config.NEO4J_PASSWORD is set
+            result = await BackendFactory._auto_select_backend()
 
-                # Auto-select should try Neo4j because Config.NEO4J_PASSWORD is set
-                result = await BackendFactory._auto_select_backend()
-
-                # This assertion WILL FAIL with current implementation
-                # Current code checks os.getenv(), which is None, so skips Neo4j
-                # Expected: Should call _create_neo4j() because Config has password
-                mock_create.assert_called_once()
+            # Should call _create_neo4j() because Config has password
+            mock_create.assert_called_once()
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(not HAS_MEMGRAPH, reason="memgraph (mgclient) package not installed")
@@ -537,17 +527,17 @@ class TestFactoryConfigEdgeCases:
 
     @pytest.fixture(autouse=True)
     def save_and_restore_config(self):
-        """Save and restore Config values."""
-        original_backend = Config.BACKEND
-        original_neo4j_password = Config.NEO4J_PASSWORD
-        original_api_key = Config.MEMORYGRAPH_API_KEY
+        """Save and restore Config values (including descriptors)."""
+        config_keys = ["BACKEND", "NEO4J_PASSWORD", "MEMORYGRAPH_API_KEY"]
+        original_values = {
+            key: Config.__dict__[key] for key in config_keys if key in Config.__dict__
+        }
         original_env = os.environ.copy()
 
         yield
 
-        Config.BACKEND = original_backend
-        Config.NEO4J_PASSWORD = original_neo4j_password
-        Config.MEMORYGRAPH_API_KEY = original_api_key
+        for key, value in original_values.items():
+            setattr(Config, key, value)
         os.environ.clear()
         os.environ.update(original_env)
 
@@ -614,11 +604,11 @@ class TestFactoryConfigIntegration:
 
     @pytest.fixture(autouse=True)
     def save_and_restore_config(self):
-        """Save and restore Config and environment."""
+        """Save and restore Config and environment (including descriptors)."""
+        config_keys = ["BACKEND", "SQLITE_PATH", "NEO4J_PASSWORD",
+                        "MEMGRAPH_URI", "MEMORYGRAPH_API_KEY"]
         original_values = {
-            "BACKEND": Config.BACKEND,
-            "SQLITE_PATH": Config.SQLITE_PATH,
-            "NEO4J_PASSWORD": Config.NEO4J_PASSWORD,
+            key: Config.__dict__[key] for key in config_keys if key in Config.__dict__
         }
         original_env = os.environ.copy()
 

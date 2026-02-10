@@ -3,6 +3,11 @@ Unit tests for FalkorDBLite backend implementation.
 
 These tests use mocked FalkorDBLite client to verify backend logic without
 requiring a running FalkorDBLite instance.
+
+Mock results use the real FalkorDB response format:
+  - result.header: list of [ColumnType, column_name] pairs
+  - result.result_set: list of lists (rows of column values)
+  - Node objects have a .properties dict
 """
 
 import pytest
@@ -31,20 +36,49 @@ from memorygraph.models import (
 )
 
 
-def setup_mock_falkordblite(result_set=None):
+def _make_node(properties: dict) -> Mock:
+    """Create a mock FalkorDB Node with a properties dict."""
+    node = Mock()
+    node.properties = properties
+    return node
+
+
+def _make_result(header_names: list, rows: list) -> Mock:
+    """
+    Create a mock FalkorDB QueryResult matching the real format.
+
+    Args:
+        header_names: List of column name strings (e.g., ["id", "m"])
+        rows: List of lists, each inner list is a row of values
+    """
+    result = Mock()
+    # FalkorDB header format: [[ColumnType, column_name], ...]
+    result.header = [[1, name] for name in header_names]
+    result.result_set = rows
+    return result
+
+
+def setup_mock_falkordblite(header_names=None, rows=None):
     """
     Helper to set up mock FalkorDBLite client with proper result handling.
 
     Args:
-        result_set: The result set to return from queries
+        header_names: List of column name strings for the header
+        rows: List of lists for result_set rows
 
     Returns:
         Tuple of (mock_client, mock_graph, mock_FalkorDB_class)
     """
     mock_client = Mock()
     mock_graph = Mock()
-    mock_result = Mock()
-    mock_result.result_set = result_set if result_set is not None else []
+
+    if header_names is not None and rows is not None:
+        mock_result = _make_result(header_names, rows)
+    else:
+        mock_result = Mock()
+        mock_result.result_set = []
+        mock_result.header = []
+
     mock_graph.query.return_value = mock_result
     mock_client.select_graph.return_value = mock_graph
 
@@ -127,10 +161,11 @@ class TestFalkorDBLiteQuery:
     """Test FalkorDBLite query execution."""
 
     @pytest.mark.asyncio
-    async def test_execute_query_read(self):
-        """Test executing a read query."""
+    async def test_execute_query_read_with_node(self):
+        """Test executing a read query that returns a Node."""
+        node = _make_node({"id": "123", "title": "Test"})
         mock_client, mock_graph, mock_FalkorDB = setup_mock_falkordblite(
-            result_set=[{"n": {"id": "123", "title": "Test"}}]
+            header_names=["n"], rows=[[node]]
         )
 
         backend = FalkorDBLiteBackend(db_path='/tmp/test.db')
@@ -146,10 +181,10 @@ class TestFalkorDBLiteQuery:
         assert result[0]["n"]["id"] == "123"
 
     @pytest.mark.asyncio
-    async def test_execute_query_write(self):
-        """Test executing a write query."""
+    async def test_execute_query_write_with_scalar(self):
+        """Test executing a write query that returns scalar values."""
         mock_client, mock_graph, mock_FalkorDB = setup_mock_falkordblite(
-            result_set=[{"id": "456"}]
+            header_names=["id"], rows=[["456"]]
         )
 
         backend = FalkorDBLiteBackend(db_path='/tmp/test.db')
@@ -213,7 +248,7 @@ class TestFalkorDBLiteMemoryOperations:
     async def test_store_memory(self, sample_memory):
         """Test storing a memory."""
         mock_client, mock_graph, mock_FalkorDB = setup_mock_falkordblite(
-            result_set=[{"id": sample_memory.id}]
+            header_names=["id"], rows=[[sample_memory.id]]
         )
 
         backend = FalkorDBLiteBackend(db_path='/tmp/test.db')
@@ -226,22 +261,21 @@ class TestFalkorDBLiteMemoryOperations:
     @pytest.mark.asyncio
     async def test_get_memory(self, sample_memory):
         """Test retrieving a memory by ID."""
+        node = _make_node({
+            "id": sample_memory.id,
+            "type": "solution",
+            "title": "Redis Timeout Fix",
+            "content": "Increased connection timeout to 5000ms",
+            "summary": None,
+            "tags": ["redis", "timeout", "performance"],
+            "importance": 0.8,
+            "confidence": 0.9,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "usage_count": 0
+        })
         mock_client, mock_graph, mock_FalkorDB = setup_mock_falkordblite(
-            result_set=[{
-                "m": {
-                    "id": sample_memory.id,
-                    "type": "solution",
-                    "title": "Redis Timeout Fix",
-                    "content": "Increased connection timeout to 5000ms",
-                    "summary": None,
-                    "tags": ["redis", "timeout", "performance"],
-                    "importance": 0.8,
-                    "confidence": 0.9,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                    "usage_count": 0
-                }
-            }]
+            header_names=["m"], rows=[[node]]
         )
 
         backend = FalkorDBLiteBackend(db_path='/tmp/test.db')
@@ -256,9 +290,7 @@ class TestFalkorDBLiteMemoryOperations:
     @pytest.mark.asyncio
     async def test_get_memory_not_found(self):
         """Test retrieving a non-existent memory."""
-        mock_client, mock_graph, mock_FalkorDB = setup_mock_falkordblite(
-            result_set=[]
-        )
+        mock_client, mock_graph, mock_FalkorDB = setup_mock_falkordblite()
 
         backend = FalkorDBLiteBackend(db_path='/tmp/test.db')
         await backend.connect()
@@ -271,7 +303,7 @@ class TestFalkorDBLiteMemoryOperations:
     async def test_update_memory(self, sample_memory):
         """Test updating an existing memory."""
         mock_client, mock_graph, mock_FalkorDB = setup_mock_falkordblite(
-            result_set=[{"id": sample_memory.id}]
+            header_names=["id"], rows=[[sample_memory.id]]
         )
 
         backend = FalkorDBLiteBackend(db_path='/tmp/test.db')
@@ -286,7 +318,7 @@ class TestFalkorDBLiteMemoryOperations:
     async def test_delete_memory(self, sample_memory):
         """Test deleting a memory."""
         mock_client, mock_graph, mock_FalkorDB = setup_mock_falkordblite(
-            result_set=[{"deleted_count": 1}]
+            header_names=["deleted_count"], rows=[[1]]
         )
 
         backend = FalkorDBLiteBackend(db_path='/tmp/test.db')
@@ -305,7 +337,7 @@ class TestFalkorDBLiteRelationships:
         """Test creating a relationship between memories."""
         rel_id = str(uuid.uuid4())
         mock_client, mock_graph, mock_FalkorDB = setup_mock_falkordblite(
-            result_set=[{"id": rel_id}]
+            header_names=["id"], rows=[[rel_id]]
         )
 
         backend = FalkorDBLiteBackend(db_path='/tmp/test.db')
@@ -324,27 +356,26 @@ class TestFalkorDBLiteRelationships:
     @pytest.mark.asyncio
     async def test_get_related_memories(self):
         """Test getting related memories."""
+        related_node = _make_node({
+            "id": "mem2",
+            "type": "solution",
+            "title": "Related Memory",
+            "content": "Content",
+            "tags": [],
+            "importance": 0.7,
+            "confidence": 0.8,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "usage_count": 0
+        })
+        rel_props = {
+            "strength": 0.9,
+            "confidence": 0.8,
+            "context": "Test context"
+        }
         mock_client, mock_graph, mock_FalkorDB = setup_mock_falkordblite(
-            result_set=[{
-                "related": {
-                    "id": "mem2",
-                    "type": "solution",
-                    "title": "Related Memory",
-                    "content": "Content",
-                    "tags": [],
-                    "importance": 0.7,
-                    "confidence": 0.8,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                    "usage_count": 0
-                },
-                "rel_type": "SOLVES",
-                "rel_props": {
-                    "strength": 0.9,
-                    "confidence": 0.8,
-                    "context": "Test context"
-                }
-            }]
+            header_names=["related", "rel_type", "rel_props"],
+            rows=[[related_node, "SOLVES", rel_props]]
         )
 
         backend = FalkorDBLiteBackend(db_path='/tmp/test.db')
@@ -364,21 +395,20 @@ class TestFalkorDBLiteSearch:
     @pytest.mark.asyncio
     async def test_search_memories(self):
         """Test searching for memories."""
+        node = _make_node({
+            "id": "search1",
+            "type": "solution",
+            "title": "Redis Timeout",
+            "content": "Fix for timeout",
+            "tags": ["redis"],
+            "importance": 0.8,
+            "confidence": 0.9,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "usage_count": 0
+        })
         mock_client, mock_graph, mock_FalkorDB = setup_mock_falkordblite(
-            result_set=[{
-                "m": {
-                    "id": "search1",
-                    "type": "solution",
-                    "title": "Redis Timeout",
-                    "content": "Fix for timeout",
-                    "tags": ["redis"],
-                    "importance": 0.8,
-                    "confidence": 0.9,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                    "usage_count": 0
-                }
-            }]
+            header_names=["m"], rows=[[node]]
         )
 
         backend = FalkorDBLiteBackend(db_path='/tmp/test.db')
@@ -389,7 +419,9 @@ class TestFalkorDBLiteSearch:
 
         results = await backend.search_memories(query)
 
-        assert len(results) >= 0  # Will be implemented
+        assert len(results) == 1
+        assert results[0].id == "search1"
+        assert results[0].title == "Redis Timeout"
 
 
 class TestFalkorDBLiteStatistics:
@@ -401,23 +433,28 @@ class TestFalkorDBLiteStatistics:
         mock_client = Mock()
         mock_graph = Mock()
 
-        # Mock multiple query results for different statistics
+        # Mock multiple query results using real FalkorDB format
+        # Note: memories_by_type query contains both "m.type" AND "COUNT(m)",
+        # so check for "m.type" first to avoid false match on COUNT(m)
         def mock_query_side_effect(query, params=None):
-            result = Mock()
-            if "COUNT(m)" in query:
-                result.result_set = [{"count": 42}]
-            elif "m.type" in query and "GROUP BY" in query:
-                result.result_set = [
-                    {"type": "solution", "count": 20},
-                    {"type": "problem", "count": 15}
-                ]
+            if "m.type" in query:
+                return _make_result(
+                    ["type", "count"],
+                    [["solution", 20], ["problem", 15]]
+                )
+            elif "COUNT(m)" in query:
+                return _make_result(["count"], [[42]])
             elif "COUNT(r)" in query:
-                result.result_set = [{"count": 30}]
+                return _make_result(["count"], [[30]])
             elif "AVG(m.importance)" in query:
-                result.result_set = [{"avg_importance": 0.75}]
+                return _make_result(["avg_importance"], [[0.75]])
+            elif "AVG(m.confidence)" in query:
+                return _make_result(["avg_confidence"], [[0.85]])
             else:
+                result = Mock()
                 result.result_set = []
-            return result
+                result.header = []
+                return result
 
         mock_graph.query.side_effect = mock_query_side_effect
         mock_client.select_graph.return_value = mock_graph
@@ -431,6 +468,7 @@ class TestFalkorDBLiteStatistics:
 
         assert "total_memories" in stats
         assert "memories_by_type" in stats
+        assert stats["memories_by_type"]["solution"] == 20
 
 
 class TestFalkorDBLiteHealthCheck:
@@ -440,7 +478,7 @@ class TestFalkorDBLiteHealthCheck:
     async def test_health_check_connected(self):
         """Test health check when connected."""
         mock_client, mock_graph, mock_FalkorDB = setup_mock_falkordblite(
-            result_set=[{"count": 10}]
+            header_names=["count"], rows=[[10]]
         )
 
         backend = FalkorDBLiteBackend(db_path='/tmp/test.db')
@@ -450,6 +488,7 @@ class TestFalkorDBLiteHealthCheck:
 
         assert health["connected"] is True
         assert health["backend_type"] == "falkordblite"
+        assert health["statistics"]["memory_count"] == 10
         assert "db_path" in health
 
     @pytest.mark.asyncio

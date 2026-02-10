@@ -137,7 +137,7 @@ class TestNeo4jBackendConnection:
 
             backend = Neo4jBackend(uri="bolt://test:7687", password="test")
 
-            with pytest.raises(DatabaseConnectionError, match="Unexpected error connecting to Neo4j"):
+            with pytest.raises(DatabaseConnectionError, match="Failed to connect to Neo4j"):
                 await backend.connect()
 
             assert backend._connected is False

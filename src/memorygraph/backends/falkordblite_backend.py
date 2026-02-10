@@ -134,10 +134,31 @@ class FalkorDBLiteBackend(GraphBackend):
             # Execute query on FalkorDBLite
             result = self.graph.query(query, params)
 
-            # Convert result to list of dicts
+            # Convert result to list of dicts using column headers
             result_list = []
             if hasattr(result, 'result_set') and result.result_set:
-                result_list = result.result_set
+                # Extract column names from header
+                # FalkorDB header format: [[ColumnType, 'column_name'], ...]
+                column_names = []
+                if hasattr(result, 'header') and result.header:
+                    for h in result.header:
+                        if isinstance(h, (list, tuple)) and len(h) >= 2:
+                            column_names.append(h[1])
+                        else:
+                            column_names.append(str(h))
+
+                for row in result.result_set:
+                    if isinstance(row, dict):
+                        # Already a dict (some client versions may do this)
+                        result_list.append(row)
+                    elif isinstance(row, (list, tuple)) and column_names:
+                        record = {}
+                        for i, col_name in enumerate(column_names):
+                            if i < len(row):
+                                record[col_name] = self._convert_falkordb_value(row[i])
+                        result_list.append(record)
+                    else:
+                        result_list.append(row)
 
             return result_list
 
@@ -661,6 +682,22 @@ class FalkorDBLiteBackend(GraphBackend):
     def is_cypher_capable(self) -> bool:
         """FalkorDBLite supports native Cypher query execution."""
         return True
+
+    @staticmethod
+    def _convert_falkordb_value(value: Any) -> Any:
+        """
+        Convert FalkorDB-specific types (Node, Edge) to plain dicts.
+
+        Args:
+            value: A value from a FalkorDB result row
+
+        Returns:
+            Converted value (dict for Node/Edge, original value otherwise)
+        """
+        if hasattr(value, 'properties'):
+            # FalkorDB Node or Edge object - extract properties dict
+            return dict(value.properties)
+        return value
 
     def _falkordblite_to_memory(self, node_data: Dict[str, Any]) -> Optional[Memory]:
         """

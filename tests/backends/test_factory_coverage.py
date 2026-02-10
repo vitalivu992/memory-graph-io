@@ -23,22 +23,16 @@ from src.memorygraph.config import Config
 
 @contextmanager
 def patch_config(**kwargs):
-    """
-    Context manager to temporarily patch Config class attributes.
+    """Context manager to temporarily patch Config class attributes.
 
-    Usage:
-        with patch_config(BACKEND='neo4j', NEO4J_PASSWORD='test'):
-            # Config.BACKEND is now 'neo4j'
-            ...
-        # Config.BACKEND is restored
-
-    This is needed because factory.py now reads from Config, not os.getenv().
+    Saves raw class dict entries (including _EnvVar descriptors) so that
+    dynamic env var resolution is restored on exit.
     """
     original_values = {}
     for key, value in kwargs.items():
-        if hasattr(Config, key):
-            original_values[key] = getattr(Config, key)
-            setattr(Config, key, value)
+        if key in Config.__dict__:
+            original_values[key] = Config.__dict__[key]
+        setattr(Config, key, value)
     try:
         yield
     finally:
@@ -67,32 +61,42 @@ def mock_optional_backends():
     """Mock optional backend modules to avoid import errors."""
     import sys
     from unittest.mock import MagicMock
-    
+
+    # Save original module references so we can restore them on cleanup.
+    # Deleting from sys.modules would cause re-imports to create NEW classes,
+    # breaking isinstance/except checks in already-imported backend modules.
+    saved_modules = {}
+    for mod_name in ['neo4j', 'neo4j.exceptions', 'gqlalchemy']:
+        if mod_name in sys.modules:
+            saved_modules[mod_name] = sys.modules[mod_name]
+
     # Create comprehensive mock for neo4j package
     neo4j_mock = MagicMock()
     neo4j_mock.AsyncGraphDatabase = MagicMock()
     neo4j_mock.AsyncDriver = MagicMock()
-    
+
     # Mock neo4j.exceptions module
     neo4j_exceptions_mock = MagicMock()
     neo4j_exceptions_mock.ServiceUnavailable = type('ServiceUnavailable', (Exception,), {})
     neo4j_exceptions_mock.AuthError = type('AuthError', (Exception,), {})
     neo4j_exceptions_mock.Neo4jError = type('Neo4jError', (Exception,), {})
     neo4j_mock.exceptions = neo4j_exceptions_mock
-    
+
     sys.modules['neo4j'] = neo4j_mock
     sys.modules['neo4j.exceptions'] = neo4j_exceptions_mock
-    
+
     # Mock gqlalchemy for memgraph
-    memgraph_mock = MagicMock()  
+    memgraph_mock = MagicMock()
     sys.modules['gqlalchemy'] = memgraph_mock
-    
+
     yield
-    
-    # Cleanup
-    for module in ['neo4j', 'neo4j.exceptions', 'gqlalchemy']:
-        if module in sys.modules:
-            del sys.modules[module]
+
+    # Restore original modules (or remove mocks if they weren't present before)
+    for mod_name in ['neo4j', 'neo4j.exceptions', 'gqlalchemy']:
+        if mod_name in saved_modules:
+            sys.modules[mod_name] = saved_modules[mod_name]
+        elif mod_name in sys.modules:
+            del sys.modules[mod_name]
 
 
 class TestBackendTypeDetection:
