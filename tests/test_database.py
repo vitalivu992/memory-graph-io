@@ -10,33 +10,39 @@ Tests cover:
 - Async operations
 """
 
+import asyncio
 import importlib.util
-import pytest
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from memorygraph.database import Neo4jConnection, MemoryDatabase
-from memorygraph.config import Config
+import pytest
 
+from memorygraph.database import MemoryDatabase, Neo4jConnection
+from memorygraph.models import (
+    DatabaseConnectionError,
+    Memory,
+    MemoryContext,
+    MemoryType,
+    RelationshipProperties,
+    RelationshipType,
+    SearchQuery,
+)
 from tests.conftest import patch_config
 
-# Check if neo4j is available
 neo4j_available = importlib.util.find_spec("neo4j") is not None
 neo4j_skip = pytest.mark.skipif(
     not neo4j_available,
-    reason="neo4j package not installed"
-)
-from memorygraph.models import (
-    Memory, MemoryType, MemoryContext, Relationship,
-    RelationshipType, RelationshipProperties, SearchQuery,
-    MemoryNotFoundError, DatabaseConnectionError, SchemaError,
-    ValidationError
+    reason="neo4j package not installed",
 )
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def create_mock_execute(return_data):
-    """Helper to create async execute mock that properly awaits."""
+    """Create an async execute mock that runs the transaction function."""
     async def mock_execute(func, *args):
         mock_tx = AsyncMock()
         mock_result = AsyncMock()
@@ -45,6 +51,15 @@ def create_mock_execute(return_data):
         return await func(mock_tx, *args)
     return mock_execute
 
+
+def _wire_session(mock_driver, mock_session):
+    """Connect *mock_driver.session* to return *mock_session*."""
+    mock_driver.session = MagicMock(return_value=mock_session)
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
 
 @pytest.fixture
 def mock_driver():
@@ -65,11 +80,11 @@ def mock_session():
 
 @pytest.fixture
 async def connection(mock_driver):
-    """Create a test Neo4j connection."""
+    """Create a test Neo4j connection with the mock driver attached."""
     conn = Neo4jConnection(
         uri="bolt://localhost:7687",
         user="neo4j",
-        password="test_password"
+        password="test_password",
     )
     conn.driver = mock_driver
     return conn
@@ -95,10 +110,14 @@ def sample_memory():
         context=MemoryContext(
             project_path="/test/project",
             files_involved=["test.py"],
-            languages=["python"]
-        )
+            languages=["python"],
+        ),
     )
 
+
+# ---------------------------------------------------------------------------
+# Neo4jConnection tests
+# ---------------------------------------------------------------------------
 
 class TestNeo4jConnection:
     """Test Neo4j connection management."""
@@ -108,7 +127,7 @@ class TestNeo4jConnection:
         conn = Neo4jConnection(
             uri="bolt://localhost:7687",
             user="neo4j",
-            password="password"
+            password="password",
         )
         assert conn.uri == "bolt://localhost:7687"
         assert conn.user == "neo4j"
@@ -117,11 +136,10 @@ class TestNeo4jConnection:
 
     def test_connection_initialization_from_config(self):
         """Test connection initialization from Config class."""
-        # Neo4jConnection now reads from Config, not os.environ directly
         with patch_config(
             NEO4J_URI="bolt://custom:7687",
             NEO4J_USER="custom_user",
-            NEO4J_PASSWORD="custom_pass"
+            NEO4J_PASSWORD="custom_pass",
         ):
             conn = Neo4jConnection()
             assert conn.uri == "bolt://custom:7687"
@@ -130,17 +148,14 @@ class TestNeo4jConnection:
 
     def test_connection_initialization_missing_password(self):
         """Test that missing password raises error."""
-        with pytest.raises(DatabaseConnectionError) as exc_info:
+        with pytest.raises(DatabaseConnectionError, match="password must be provided"):
             Neo4jConnection(uri="bolt://localhost:7687", user="neo4j")
-
-        assert "password must be provided" in str(exc_info.value)
 
     @neo4j_skip
     @pytest.mark.asyncio
     async def test_connect_success(self, connection, mock_driver):
         """Test successful connection to Neo4j."""
-        # Patch neo4j module and AsyncGraphDatabase at import time inside connect()
-        with patch('neo4j.AsyncGraphDatabase') as mock_graph_db:
+        with patch("neo4j.AsyncGraphDatabase") as mock_graph_db:
             mock_graph_db.driver.return_value = mock_driver
             connection.driver = None
             await connection.connect()
@@ -156,16 +171,13 @@ class TestNeo4jConnection:
 
         conn = Neo4jConnection(uri="bolt://localhost:7687", user="neo4j", password="password")
 
-        # Patch neo4j module at import time inside connect()
-        with patch('neo4j.AsyncGraphDatabase') as mock_graph_db:
-            mock_driver = AsyncMock()
-            mock_driver.verify_connectivity = AsyncMock(side_effect=ServiceUnavailable("Service unavailable"))
-            mock_graph_db.driver.return_value = mock_driver
+        with patch("neo4j.AsyncGraphDatabase") as mock_graph_db:
+            driver = AsyncMock()
+            driver.verify_connectivity = AsyncMock(side_effect=ServiceUnavailable("Service unavailable"))
+            mock_graph_db.driver.return_value = driver
 
-            with pytest.raises(DatabaseConnectionError) as exc_info:
+            with pytest.raises(DatabaseConnectionError, match="Failed to connect"):
                 await conn.connect()
-
-            assert "Failed to connect" in str(exc_info.value)
 
     @neo4j_skip
     @pytest.mark.asyncio
@@ -175,16 +187,13 @@ class TestNeo4jConnection:
 
         conn = Neo4jConnection(uri="bolt://localhost:7687", user="neo4j", password="wrong")
 
-        # Patch neo4j module at import time inside connect()
-        with patch('neo4j.AsyncGraphDatabase') as mock_graph_db:
-            mock_driver = AsyncMock()
-            mock_driver.verify_connectivity = AsyncMock(side_effect=AuthError("Auth failed"))
-            mock_graph_db.driver.return_value = mock_driver
+        with patch("neo4j.AsyncGraphDatabase") as mock_graph_db:
+            driver = AsyncMock()
+            driver.verify_connectivity = AsyncMock(side_effect=AuthError("Auth failed"))
+            mock_graph_db.driver.return_value = driver
 
-            with pytest.raises(DatabaseConnectionError) as exc_info:
+            with pytest.raises(DatabaseConnectionError, match="Authentication failed"):
                 await conn.connect()
-
-            assert "Authentication failed" in str(exc_info.value)
 
     @neo4j_skip
     @pytest.mark.asyncio
@@ -192,28 +201,22 @@ class TestNeo4jConnection:
         """Test connection failure with unexpected error."""
         conn = Neo4jConnection(uri="bolt://localhost:7687", user="neo4j", password="password")
 
-        # Patch neo4j module at import time inside connect()
-        with patch('neo4j.AsyncGraphDatabase') as mock_graph_db:
-            mock_driver = AsyncMock()
-            mock_driver.verify_connectivity = AsyncMock(side_effect=RuntimeError("Unexpected error"))
-            mock_graph_db.driver.return_value = mock_driver
+        with patch("neo4j.AsyncGraphDatabase") as mock_graph_db:
+            driver = AsyncMock()
+            driver.verify_connectivity = AsyncMock(side_effect=RuntimeError("Unexpected error"))
+            mock_graph_db.driver.return_value = driver
 
-            with pytest.raises(DatabaseConnectionError) as exc_info:
+            with pytest.raises(DatabaseConnectionError, match="Unexpected error"):
                 await conn.connect()
-
-            assert "Unexpected error" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_connect_neo4j_import_error(self):
         """Test connection failure when neo4j package is not installed."""
         conn = Neo4jConnection(uri="bolt://localhost:7687", user="neo4j", password="password")
 
-        # Simulate neo4j not being installed
-        with patch('builtins.__import__', side_effect=ImportError("No module named 'neo4j'")):
-            with pytest.raises(DatabaseConnectionError) as exc_info:
+        with patch("builtins.__import__", side_effect=ImportError("No module named 'neo4j'")):
+            with pytest.raises(DatabaseConnectionError, match="neo4j package is required"):
                 await conn.connect()
-
-            assert "neo4j package is required" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_close_connection(self, connection, mock_driver):
@@ -225,7 +228,7 @@ class TestNeo4jConnection:
     @pytest.mark.asyncio
     async def test_session_context_manager(self, connection, mock_driver, mock_session):
         """Test async session context manager."""
-        mock_driver.session = MagicMock(return_value=mock_session)
+        _wire_session(mock_driver, mock_session)
 
         async with connection.session() as session:
             assert session is not None
@@ -238,28 +241,19 @@ class TestNeo4jConnection:
         conn = Neo4jConnection(uri="bolt://localhost:7687", user="neo4j", password="password")
         conn.driver = None
 
-        with pytest.raises(DatabaseConnectionError) as exc_info:
+        with pytest.raises(DatabaseConnectionError, match="(?i)not connected"):
             async with conn.session():
                 pass
-
-        assert "not connected" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_execute_write_query(self, connection, mock_driver, mock_session):
         """Test executing write query."""
-        async def mock_execute_write(func, *args):
-            mock_tx = AsyncMock()
-            mock_result = AsyncMock()
-            mock_result.data = AsyncMock(return_value=[{"created": 1}])
-            mock_tx.run = AsyncMock(return_value=mock_result)
-            return await func(mock_tx, *args)
-
-        mock_session.execute_write = mock_execute_write
-        mock_driver.session = MagicMock(return_value=mock_session)
+        mock_session.execute_write = create_mock_execute([{"created": 1}])
+        _wire_session(mock_driver, mock_session)
 
         result = await connection.execute_write_query(
             "CREATE (n:Test {name: $name}) RETURN n",
-            {"name": "test"}
+            {"name": "test"},
         )
 
         assert result == [{"created": 1}]
@@ -267,20 +261,10 @@ class TestNeo4jConnection:
     @pytest.mark.asyncio
     async def test_execute_read_query(self, connection, mock_driver, mock_session):
         """Test executing read query."""
-        async def mock_execute_read(func, *args):
-            mock_tx = AsyncMock()
-            mock_result = AsyncMock()
-            mock_result.data = AsyncMock(return_value=[{"id": "123", "name": "test"}])
-            mock_tx.run = AsyncMock(return_value=mock_result)
-            return await func(mock_tx, *args)
+        mock_session.execute_read = create_mock_execute([{"id": "123", "name": "test"}])
+        _wire_session(mock_driver, mock_session)
 
-        mock_session.execute_read = mock_execute_read
-        mock_driver.session = MagicMock(return_value=mock_session)
-
-        result = await connection.execute_read_query(
-            "MATCH (n:Test) RETURN n",
-            {}
-        )
+        result = await connection.execute_read_query("MATCH (n:Test) RETURN n", {})
 
         assert len(result) == 1
         assert result[0]["name"] == "test"
@@ -295,12 +279,10 @@ class TestNeo4jConnection:
             raise Neo4jError("Transaction failed")
 
         mock_session.execute_write = mock_execute_write_error
-        mock_driver.session = MagicMock(return_value=mock_session)
+        _wire_session(mock_driver, mock_session)
 
-        with pytest.raises(DatabaseConnectionError) as exc_info:
+        with pytest.raises(DatabaseConnectionError, match="Write query failed"):
             await connection.execute_write_query("CREATE (n:Test)", {})
-
-        assert "Write query failed" in str(exc_info.value)
 
     @neo4j_skip
     @pytest.mark.asyncio
@@ -312,27 +294,26 @@ class TestNeo4jConnection:
             raise Neo4jError("Query failed")
 
         mock_session.execute_read = mock_execute_read_error
-        mock_driver.session = MagicMock(return_value=mock_session)
+        _wire_session(mock_driver, mock_session)
 
-        with pytest.raises(DatabaseConnectionError) as exc_info:
+        with pytest.raises(DatabaseConnectionError, match="Read query failed"):
             await connection.execute_read_query("MATCH (n) RETURN n", {})
 
-        assert "Read query failed" in str(exc_info.value)
 
+# ---------------------------------------------------------------------------
+# MemoryDatabase tests
+# ---------------------------------------------------------------------------
 
 class TestMemoryDatabase:
     """Test MemoryDatabase operations."""
 
     @pytest.mark.asyncio
     async def test_initialize_schema(self, database, connection, mock_driver, mock_session):
-        """Test schema initialization."""
+        """Test schema initialization completes without error."""
         mock_session.execute_write = create_mock_execute([])
-        mock_driver.session = MagicMock(return_value=mock_session)
+        _wire_session(mock_driver, mock_session)
 
         await database.initialize_schema()
-
-        # Schema initialization should complete without error
-        assert True
 
     @pytest.mark.asyncio
     async def test_initialize_schema_constraint_exists(self, database, connection, mock_driver, mock_session):
@@ -342,8 +323,7 @@ class TestMemoryDatabase:
         async def mock_execute_with_exists(func, *args):
             nonlocal call_count
             call_count += 1
-            # Simulate "already exists" error for some calls
-            if call_count <= 3:  # First few constraint calls
+            if call_count <= 3:
                 raise Exception("Constraint already exists")
             mock_tx = AsyncMock()
             mock_result = AsyncMock()
@@ -352,21 +332,18 @@ class TestMemoryDatabase:
             return await func(mock_tx, *args)
 
         mock_session.execute_write = mock_execute_with_exists
-        mock_driver.session = MagicMock(return_value=mock_session)
+        _wire_session(mock_driver, mock_session)
 
-        # Should complete without raising error (errors are logged)
         await database.initialize_schema()
-        assert True
 
     @pytest.mark.asyncio
     async def test_initialize_schema_other_error(self, database, connection, mock_driver, mock_session):
-        """Test schema initialization with non-exists errors."""
+        """Test schema initialization with non-exists errors (logged as warnings)."""
         call_count = 0
 
         async def mock_execute_with_error(func, *args):
             nonlocal call_count
             call_count += 1
-            # Simulate a different error for first call
             if call_count == 1:
                 raise Exception("Permission denied")
             mock_tx = AsyncMock()
@@ -376,55 +353,41 @@ class TestMemoryDatabase:
             return await func(mock_tx, *args)
 
         mock_session.execute_write = mock_execute_with_error
-        mock_driver.session = MagicMock(return_value=mock_session)
+        _wire_session(mock_driver, mock_session)
 
-        # Should complete without raising error (errors are logged as warnings)
         await database.initialize_schema()
-        assert True
 
     @pytest.mark.asyncio
     async def test_store_memory_basic(self, database, connection, sample_memory, mock_driver, mock_session):
         """Test storing a basic memory."""
         mock_session.execute_write = create_mock_execute([{"id": sample_memory.id}])
-        mock_driver.session = MagicMock(return_value=mock_session)
+        _wire_session(mock_driver, mock_session)
 
         memory_id = await database.store_memory(sample_memory)
-
         assert memory_id == sample_memory.id
 
     @pytest.mark.asyncio
     async def test_store_memory_generates_id(self, database, connection, sample_memory, mock_driver, mock_session):
         """Test that store_memory generates ID if not provided."""
-        sample_memory.id = None  # Remove ID
+        sample_memory.id = None
         generated_id = str(uuid.uuid4())
 
-        async def mock_execute_with_id(func, *args):
-            mock_tx = AsyncMock()
-            mock_result = AsyncMock()
-            # Return a generated ID
-            mock_result.data = AsyncMock(return_value=[{"id": generated_id}])
-            mock_tx.run = AsyncMock(return_value=mock_result)
-            return await func(mock_tx, *args)
-
-        mock_session.execute_write = mock_execute_with_id
-        mock_driver.session = MagicMock(return_value=mock_session)
+        mock_session.execute_write = create_mock_execute([{"id": generated_id}])
+        _wire_session(mock_driver, mock_session)
 
         memory_id = await database.store_memory(sample_memory)
 
-        # Should have generated and returned an ID
         assert memory_id == generated_id
         assert sample_memory.id is not None
 
     @pytest.mark.asyncio
     async def test_store_memory_no_result(self, database, connection, sample_memory, mock_driver, mock_session):
         """Test store_memory when query returns no result."""
-        mock_session.execute_write = create_mock_execute([])  # Empty result
-        mock_driver.session = MagicMock(return_value=mock_session)
+        mock_session.execute_write = create_mock_execute([])
+        _wire_session(mock_driver, mock_session)
 
-        with pytest.raises(DatabaseConnectionError) as exc_info:
+        with pytest.raises(DatabaseConnectionError, match="Failed to store memory"):
             await database.store_memory(sample_memory)
-
-        assert "Failed to store memory" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_store_memory_unexpected_error(self, database, connection, sample_memory, mock_driver, mock_session):
@@ -433,18 +396,15 @@ class TestMemoryDatabase:
             raise RuntimeError("Unexpected database error")
 
         mock_session.execute_write = mock_execute_error
-        mock_driver.session = MagicMock(return_value=mock_session)
+        _wire_session(mock_driver, mock_session)
 
-        with pytest.raises(DatabaseConnectionError) as exc_info:
+        with pytest.raises(DatabaseConnectionError, match="Unexpected database error"):
             await database.store_memory(sample_memory)
-
-        # Error message may be wrapped at different levels
-        assert "Unexpected database error" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_get_memory_existing(self, database, connection, sample_memory, mock_driver, mock_session):
         """Test retrieving an existing memory."""
-        # Mock the response data
+        now = datetime.now(timezone.utc).isoformat()
         memory_data = {
             "m": {
                 "id": sample_memory.id,
@@ -454,13 +414,13 @@ class TestMemoryDatabase:
                 "tags": sample_memory.tags,
                 "importance": sample_memory.importance,
                 "confidence": sample_memory.confidence,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "updated_at": datetime.now(timezone.utc).isoformat()
+                "created_at": now,
+                "updated_at": now,
             },
-            "relationships": []
+            "relationships": [],
         }
         mock_session.execute_read = create_mock_execute([memory_data])
-        mock_driver.session = MagicMock(return_value=mock_session)
+        _wire_session(mock_driver, mock_session)
 
         memory = await database.get_memory(sample_memory.id)
 
@@ -471,16 +431,15 @@ class TestMemoryDatabase:
     async def test_get_memory_nonexistent(self, database, connection, mock_driver, mock_session):
         """Test retrieving a non-existent memory."""
         mock_session.execute_read = create_mock_execute([])
-        mock_driver.session = MagicMock(return_value=mock_session)
+        _wire_session(mock_driver, mock_session)
 
         memory = await database.get_memory("nonexistent-id")
-
         assert memory is None
 
     @pytest.mark.asyncio
     async def test_search_memories_basic(self, database, connection, mock_driver, mock_session):
         """Test basic memory search."""
-        # Mock search results
+        now = datetime.now(timezone.utc).isoformat()
         search_results = [
             {
                 "m": {
@@ -491,13 +450,13 @@ class TestMemoryDatabase:
                     "tags": ["test"],
                     "importance": 0.8,
                     "confidence": 0.9,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                }
-            }
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            },
         ]
         mock_session.execute_read = create_mock_execute(search_results)
-        mock_driver.session = MagicMock(return_value=mock_session)
+        _wire_session(mock_driver, mock_session)
 
         search_query = SearchQuery(query="test", memory_types=[MemoryType.SOLUTION])
         results = await database.search_memories(search_query)
@@ -509,52 +468,45 @@ class TestMemoryDatabase:
     async def test_search_memories_with_filters(self, database, connection, mock_driver, mock_session):
         """Test memory search with multiple filters."""
         mock_session.execute_read = create_mock_execute([])
-        mock_driver.session = MagicMock(return_value=mock_session)
+        _wire_session(mock_driver, mock_session)
 
         search_query = SearchQuery(
             query="test",
             memory_types=[MemoryType.SOLUTION],
             tags=["python", "testing"],
             min_importance=0.7,
-            limit=10
+            limit=10,
         )
         results = await database.search_memories(search_query)
-
         assert isinstance(results, list)
 
     @pytest.mark.asyncio
     async def test_update_memory(self, database, connection, sample_memory, mock_driver, mock_session):
         """Test updating a memory."""
         mock_session.execute_write = create_mock_execute([{"updated": 1}])
-        mock_driver.session = MagicMock(return_value=mock_session)
+        _wire_session(mock_driver, mock_session)
 
         sample_memory.title = "Updated Title"
         success = await database.update_memory(sample_memory)
-
         assert success is True
 
     @pytest.mark.asyncio
     async def test_delete_memory(self, database, connection, sample_memory, mock_driver, mock_session):
         """Test deleting a memory."""
-        # Exists check (read) returns the memory
         mock_session.execute_read = create_mock_execute([{"id": sample_memory.id}])
-        # Delete (write) returns empty
         mock_session.execute_write = create_mock_execute([])
-        mock_driver.session = MagicMock(return_value=mock_session)
+        _wire_session(mock_driver, mock_session)
 
         success = await database.delete_memory(sample_memory.id)
-
         assert success is True
 
     @pytest.mark.asyncio
-    async def test_delete_memory_not_found(self, database, connection, sample_memory, mock_driver, mock_session):
+    async def test_delete_memory_not_found(self, database, connection, mock_driver, mock_session):
         """Test deleting a non-existent memory returns False."""
-        # Exists check (read) returns empty — memory not found
         mock_session.execute_read = create_mock_execute([])
-        mock_driver.session = MagicMock(return_value=mock_session)
+        _wire_session(mock_driver, mock_session)
 
         success = await database.delete_memory("nonexistent-id")
-
         assert success is False
 
     @pytest.mark.asyncio
@@ -562,7 +514,7 @@ class TestMemoryDatabase:
         """Test creating a relationship between memories."""
         rel_id = str(uuid.uuid4())
         mock_session.execute_write = create_mock_execute([{"id": rel_id}])
-        mock_driver.session = MagicMock(return_value=mock_session)
+        _wire_session(mock_driver, mock_session)
 
         from_id = str(uuid.uuid4())
         to_id = str(uuid.uuid4())
@@ -571,31 +523,25 @@ class TestMemoryDatabase:
             from_memory_id=from_id,
             to_memory_id=to_id,
             relationship_type=RelationshipType.SOLVES,
-            properties=RelationshipProperties(strength=0.9, confidence=0.8)
+            properties=RelationshipProperties(strength=0.9, confidence=0.8),
         )
 
-        assert relationship_id is not None
         assert relationship_id == rel_id
 
     @pytest.mark.asyncio
-    async def test_create_relationship_invalid_type(self, database):
-        """Test creating relationship with invalid type raises error."""
-        from_id = str(uuid.uuid4())
-        to_id = str(uuid.uuid4())
-
-        # This should work without error in the current implementation
-        # but would validate in a stricter version
+    async def test_relationship_properties_validation(self, database):
+        """Test that RelationshipProperties stores values correctly."""
         props = RelationshipProperties(strength=0.9, confidence=0.8)
-
-        # The actual validation happens at the model level
         assert props.strength == 0.9
+        assert props.confidence == 0.8
 
     @pytest.mark.asyncio
     async def test_get_related_memories(self, database, connection, mock_driver, mock_session):
         """Test getting related memories with depth traversal."""
-        # Mock related memories data
         memory_id = str(uuid.uuid4())
         related_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+
         related_data = [
             {
                 "related": {
@@ -606,86 +552,71 @@ class TestMemoryDatabase:
                     "tags": [],
                     "importance": 0.7,
                     "confidence": 0.8,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "updated_at": datetime.now(timezone.utc).isoformat()
+                    "created_at": now,
+                    "updated_at": now,
                 },
                 "rel_type": "SOLVES",
                 "rel_props": {
                     "strength": 0.9,
                     "confidence": 0.8,
-                    "evidence_count": 1
+                    "evidence_count": 1,
                 },
                 "from_id": memory_id,
-                "to_id": related_id
-            }
+                "to_id": related_id,
+            },
         ]
         mock_session.execute_read = create_mock_execute(related_data)
-        mock_driver.session = MagicMock(return_value=mock_session)
+        _wire_session(mock_driver, mock_session)
 
         related = await database.get_related_memories(
             memory_id=memory_id,
             relationship_types=[RelationshipType.SOLVES],
-            max_depth=2
+            max_depth=2,
         )
-
         assert isinstance(related, list)
 
     @pytest.mark.asyncio
-    async def test_get_related_memories_depth_limit(self, database, connection, mock_driver, mock_session):
-        """Test relationship traversal respects depth limit."""
-        # Mock empty results (no related memories)
+    async def test_get_related_memories_empty(self, database, connection, mock_driver, mock_session):
+        """Test relationship traversal returns empty list when no related memories exist."""
         mock_session.execute_read = create_mock_execute([])
-        mock_driver.session = MagicMock(return_value=mock_session)
+        _wire_session(mock_driver, mock_session)
 
         memory_id = str(uuid.uuid4())
         related = await database.get_related_memories(
             memory_id=memory_id,
             relationship_types=[],
-            max_depth=1
+            max_depth=1,
         )
 
-        assert isinstance(related, list)
-        assert len(related) == 0
+        assert related == []
 
     @pytest.mark.asyncio
     async def test_get_memory_statistics(self, database, connection, mock_driver, mock_session):
         """Test getting database statistics."""
-        # Use the create_mock_execute helper to properly handle async execution
-        async def mock_execute_read(func, *args):
-            mock_tx = AsyncMock()
-            mock_result = AsyncMock()
-            mock_result.data = AsyncMock(return_value=[{
-                "total_memories": 100,
-                "total_relationships": 250,
-                "memory_types": {"solution": 50, "problem": 30, "task": 20},
-                "relationship_types": {"SOLVES": 100, "RELATED_TO": 150}
-            }])
-            mock_tx.run = AsyncMock(return_value=mock_result)
-            return await func(mock_tx, *args)
-
-        mock_session.execute_read = AsyncMock(side_effect=mock_execute_read)
-        mock_driver.session = MagicMock(return_value=mock_session)
+        mock_session.execute_read = create_mock_execute([{
+            "total_memories": 100,
+            "total_relationships": 250,
+            "memory_types": {"solution": 50, "problem": 30, "task": 20},
+            "relationship_types": {"SOLVES": 100, "RELATED_TO": 150},
+        }])
+        _wire_session(mock_driver, mock_session)
 
         stats = await database.get_memory_statistics()
-
-        assert "total_memories" in stats or isinstance(stats, dict)
+        assert isinstance(stats, dict)
 
     @pytest.mark.asyncio
     async def test_concurrent_operations(self, database, connection, sample_memory, mock_driver, mock_session):
         """Test concurrent database operations."""
-        import asyncio
-
         mock_session.execute_write = create_mock_execute([{"id": sample_memory.id}])
-        mock_driver.session = MagicMock(return_value=mock_session)
+        _wire_session(mock_driver, mock_session)
 
-        # Create multiple concurrent store operations
         memories = [
             Memory(
                 id=str(uuid.uuid4()),
                 type=MemoryType.TASK,
                 title=f"Task {i}",
                 content=f"Task content {i}",
-                tags=["test"]
+                tags=["test"],
             )
             for i in range(5)
         ]
@@ -693,41 +624,29 @@ class TestMemoryDatabase:
         results = await asyncio.gather(
             *[database.store_memory(m) for m in memories]
         )
-
         assert len(results) == 5
 
+
+# ---------------------------------------------------------------------------
+# Error handling tests
+# ---------------------------------------------------------------------------
 
 class TestErrorHandling:
     """Test error handling and edge cases."""
 
-    @pytest.mark.asyncio
-    async def test_connection_retry_logic(self):
-        """Test that connection retries work correctly."""
-        # This would test retry logic if implemented
-        conn = Neo4jConnection(uri="bolt://localhost:7687", user="neo4j", password="password")
-        assert conn.driver is None
-
     @neo4j_skip
     @pytest.mark.asyncio
     async def test_transaction_rollback(self, database, connection, mock_driver, mock_session):
-        """Test that failed transactions rollback correctly."""
+        """Test that failed transactions raise DatabaseConnectionError."""
         from neo4j.exceptions import Neo4jError
 
-        # Mock session.execute_write to raise Neo4jError
         mock_session.execute_write = AsyncMock(
-            side_effect=Neo4jError("Transaction failed")
+            side_effect=Neo4jError("Transaction failed"),
         )
-        mock_driver.session = MagicMock(return_value=mock_session)
+        _wire_session(mock_driver, mock_session)
 
-        # Should raise DatabaseConnectionError
         with pytest.raises(DatabaseConnectionError):
             await connection.execute_write_query("INVALID QUERY", {})
-
-    @pytest.mark.asyncio
-    async def test_query_timeout_handling(self, database):
-        """Test handling of query timeouts."""
-        # This would test timeout handling if configured
-        assert database.connection is not None
 
 
 if __name__ == "__main__":
