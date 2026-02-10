@@ -6,7 +6,6 @@ wrapping the existing Neo4j connection and query logic.
 """
 
 import logging
-import os
 from typing import Any, Optional
 
 from neo4j import AsyncGraphDatabase, AsyncDriver

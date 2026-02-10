@@ -7,7 +7,6 @@ with some Cypher dialect adaptations.
 """
 
 import logging
-import os
 from typing import Any, Optional
 
 from neo4j import AsyncGraphDatabase, AsyncDriver
