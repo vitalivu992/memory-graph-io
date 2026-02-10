@@ -2,11 +2,39 @@
 Shared fixtures for backend tests.
 
 This file contains reusable fixtures for mocking backends,
-especially for Memgraph and Neo4j-based backends.
+especially for Memgraph and Neo4j-based backends,
+and shared helpers for FalkorDB mock result construction.
 """
 
 import pytest
 from unittest.mock import AsyncMock, Mock
+
+
+# ---------------------------------------------------------------------------
+# FalkorDB shared mock helpers
+# ---------------------------------------------------------------------------
+
+def make_falkordb_node(properties: dict) -> Mock:
+    """Create a mock FalkorDB Node with a properties dict."""
+    node = Mock()
+    node.properties = properties
+    return node
+
+
+def make_falkordb_result(header_names: list, rows: list) -> Mock:
+    """
+    Create a mock FalkorDB QueryResult matching the real format.
+
+    Args:
+        header_names: List of column name strings (e.g., ["id", "m"])
+        rows: List of lists, each inner list is a row of values
+    """
+    result = Mock()
+    # FalkorDB header format: [[ColumnType, column_name], ...]
+    # ColumnType is an int constant; we use 1 as a placeholder
+    result.header = [[1, name] for name in header_names]
+    result.result_set = rows
+    return result
 
 
 @pytest.fixture

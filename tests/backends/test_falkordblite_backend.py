@@ -34,28 +34,8 @@ from memorygraph.models import (
     ValidationError,
     RelationshipError,
 )
-
-
-def _make_node(properties: dict) -> Mock:
-    """Create a mock FalkorDB Node with a properties dict."""
-    node = Mock()
-    node.properties = properties
-    return node
-
-
-def _make_result(header_names: list, rows: list) -> Mock:
-    """
-    Create a mock FalkorDB QueryResult matching the real format.
-
-    Args:
-        header_names: List of column name strings (e.g., ["id", "m"])
-        rows: List of lists, each inner list is a row of values
-    """
-    result = Mock()
-    # FalkorDB header format: [[ColumnType, column_name], ...]
-    result.header = [[1, name] for name in header_names]
-    result.result_set = rows
-    return result
+from tests.backends.conftest import make_falkordb_node as _make_node
+from tests.backends.conftest import make_falkordb_result as _make_result
 
 
 def setup_mock_falkordblite(header_names=None, rows=None):

@@ -30,29 +30,8 @@ from memorygraph.models import (
     ValidationError,
     RelationshipError,
 )
-
-
-def _make_node(properties: dict) -> Mock:
-    """Create a mock FalkorDB Node with a properties dict."""
-    node = Mock()
-    node.properties = properties
-    return node
-
-
-def _make_result(header_names: list, rows: list) -> Mock:
-    """
-    Create a mock FalkorDB QueryResult matching the real format.
-
-    Args:
-        header_names: List of column name strings (e.g., ["id", "m"])
-        rows: List of lists, each inner list is a row of values
-    """
-    result = Mock()
-    # FalkorDB header format: [[ColumnType, column_name], ...]
-    # ColumnType is an int constant; we use 1 as a placeholder
-    result.header = [[1, name] for name in header_names]
-    result.result_set = rows
-    return result
+from tests.backends.conftest import make_falkordb_node as _make_node
+from tests.backends.conftest import make_falkordb_result as _make_result
 
 
 class TestFalkorDBConnection:
@@ -182,7 +161,7 @@ class TestFalkorDBQuery:
 
     @pytest.mark.asyncio
     async def test_execute_query_dict_passthrough(self):
-        """Test that dict results (if client returns them) pass through unchanged."""
+        """Test that dict results (if client returns them) pass through and query is called correctly."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
@@ -202,6 +181,11 @@ class TestFalkorDBQuery:
                 "RETURN 'test' as id",
                 write=False
             )
+
+            # Verify the graph was queried with the correct Cypher
+            mock_graph.query.assert_called_once()
+            call_args = mock_graph.query.call_args
+            assert "RETURN 'test' as id" in call_args[0][0]
 
             assert len(result) == 1
             assert result[0]["id"] == "789"
