@@ -279,10 +279,53 @@ class TestSharedCRUD:
     async def test_delete_memory_returns_false_when_not_found(self):
         """delete_memory should return False if memory doesn't exist."""
         backend = _make_connected_backend(FalkorDBBackend)
-        backend.graph.query.return_value = _make_result(["deleted_count"], [[0]])
+        # Exists check returns empty result (memory not found)
+        result_empty = Mock()
+        result_empty.result_set = []
+        result_empty.header = []
+        backend.graph.query.return_value = result_empty
 
         result = await backend.delete_memory("nonexistent")
         assert result is False
+        # Only the exists check should have been called, not the delete
+        assert backend.graph.query.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_delete_memory_returns_true_when_found(self):
+        """delete_memory should return True after deleting an existing memory."""
+        backend = _make_connected_backend(FalkorDBBackend)
+
+        # First call: exists check returns the memory id
+        exists_result = _make_result(["id"], [["mem-123"]])
+        # Second call: delete returns empty (DETACH DELETE has no RETURN)
+        delete_result = Mock()
+        delete_result.result_set = []
+        delete_result.header = []
+
+        backend.graph.query.side_effect = [exists_result, delete_result]
+
+        result = await backend.delete_memory("mem-123")
+        assert result is True
+        assert backend.graph.query.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_delete_memory_no_count_after_detach_delete(self):
+        """delete_memory must NOT use COUNT(m) after DETACH DELETE m."""
+        backend = _make_connected_backend(FalkorDBBackend)
+
+        exists_result = _make_result(["id"], [["mem-123"]])
+        delete_result = Mock()
+        delete_result.result_set = []
+        delete_result.header = []
+        backend.graph.query.side_effect = [exists_result, delete_result]
+
+        await backend.delete_memory("mem-123")
+
+        # Verify the delete query does NOT contain COUNT
+        delete_call = backend.graph.query.call_args_list[1]
+        delete_query = delete_call[0][0]
+        assert "COUNT" not in delete_query
+        assert "DETACH DELETE" in delete_query
 
 
 class TestSharedRelationships:

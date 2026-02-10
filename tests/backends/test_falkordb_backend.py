@@ -350,9 +350,13 @@ class TestFalkorDBMemoryOperations:
             mock_client = Mock()
             mock_graph = Mock()
 
-            # Real format: scalar return "RETURN COUNT(m) as deleted_count"
-            mock_result = _make_result(["deleted_count"], [[1]])
-            mock_graph.query.return_value = mock_result
+            # First call: exists check returns the memory id
+            exists_result = _make_result(["id"], [[sample_memory.id]])
+            # Second call: DETACH DELETE returns empty
+            delete_result = Mock()
+            delete_result.result_set = []
+            delete_result.header = []
+            mock_graph.query.side_effect = [exists_result, delete_result]
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
 

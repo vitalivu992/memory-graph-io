@@ -554,12 +554,26 @@ class TestMemoryDatabase:
     @pytest.mark.asyncio
     async def test_delete_memory(self, database, connection, sample_memory, mock_driver, mock_session):
         """Test deleting a memory."""
-        mock_session.execute_write = create_mock_execute([{"deleted_count": 1}])
+        # Exists check (read) returns the memory
+        mock_session.execute_read = create_mock_execute([{"id": sample_memory.id}])
+        # Delete (write) returns empty
+        mock_session.execute_write = create_mock_execute([])
         mock_driver.session = MagicMock(return_value=mock_session)
 
         success = await database.delete_memory(sample_memory.id)
 
         assert success is True
+
+    @pytest.mark.asyncio
+    async def test_delete_memory_not_found(self, database, connection, sample_memory, mock_driver, mock_session):
+        """Test deleting a non-existent memory returns False."""
+        # Exists check (read) returns empty — memory not found
+        mock_session.execute_read = create_mock_execute([])
+        mock_driver.session = MagicMock(return_value=mock_session)
+
+        success = await database.delete_memory("nonexistent-id")
+
+        assert success is False
 
     @pytest.mark.asyncio
     async def test_create_relationship(self, database, connection, mock_driver, mock_session):

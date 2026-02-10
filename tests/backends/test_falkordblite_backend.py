@@ -317,9 +317,15 @@ class TestFalkorDBLiteMemoryOperations:
     @pytest.mark.asyncio
     async def test_delete_memory(self, sample_memory):
         """Test deleting a memory."""
-        mock_client, mock_graph, mock_FalkorDB = setup_mock_falkordblite(
-            header_names=["deleted_count"], rows=[[1]]
-        )
+        mock_client, mock_graph, mock_FalkorDB = setup_mock_falkordblite()
+
+        # First call: exists check returns the memory id
+        exists_result = _make_result(["id"], [[sample_memory.id]])
+        # Second call: DETACH DELETE returns empty
+        delete_result = Mock()
+        delete_result.result_set = []
+        delete_result.header = []
+        mock_graph.query.side_effect = [exists_result, delete_result]
 
         backend = FalkorDBLiteBackend(db_path='/tmp/test.db')
         await backend.connect()

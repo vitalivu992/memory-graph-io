@@ -388,19 +388,29 @@ class BaseFalkorDBBackend(GraphBackend):
             DatabaseConnectionError: If deletion fails
         """
         try:
-            query = """
+            # First check if the memory exists (COUNT after DETACH DELETE is
+            # invalid Cypher — the variable is no longer bound).
+            exists_query = """
+            MATCH (m:Memory {id: $memory_id})
+            RETURN m.id as id
+            """
+            exists = await self.execute_query(
+                exists_query, {"memory_id": memory_id}, write=False
+            )
+
+            if not exists:
+                return False
+
+            delete_query = """
             MATCH (m:Memory {id: $memory_id})
             DETACH DELETE m
-            RETURN COUNT(m) as deleted_count
             """
+            await self.execute_query(
+                delete_query, {"memory_id": memory_id}, write=True
+            )
 
-            result = await self.execute_query(query, {"memory_id": memory_id}, write=True)
-
-            success = result and result[0]["deleted_count"] > 0
-            if success:
-                logger.info(f"Deleted memory: {memory_id}")
-
-            return success
+            logger.info(f"Deleted memory: {memory_id}")
+            return True
 
         except Exception as e:
             if isinstance(e, DatabaseConnectionError):
