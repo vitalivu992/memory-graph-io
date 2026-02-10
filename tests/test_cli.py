@@ -19,11 +19,13 @@ import pytest
 from memorygraph import __version__
 from memorygraph.cli import (
     _eprint,
+    handle_migrate,
     main,
     print_config_summary,
     validate_backend,
     validate_profile,
 )
+from memorygraph.config import Config
 
 
 class TestEprintHelper:
@@ -406,3 +408,122 @@ class TestEnvironmentVariables:
             assert os.environ.get('MEMORY_BACKEND') == 'neo4j'
             # 'full' is deprecated and maps to 'extended'
             assert os.environ.get('MEMORY_TOOL_PROFILE') == 'extended'
+
+
+class TestCLIEnvOnlyConfig:
+    """Verify CLI sets only os.environ and Config reads dynamically.
+
+    After the dual-write fix, CLI no longer assigns Config.BACKEND etc.
+    directly. Instead it sets os.environ and relies on _EnvVar descriptors
+    to read the value dynamically on each access.
+    """
+
+    @patch('memorygraph.cli.server_main', new_callable=AsyncMock)
+    @patch('asyncio.run')
+    @patch.dict(os.environ, {}, clear=True)
+    def test_backend_arg_propagates_through_config(self, mock_run, mock_server):
+        """Config.BACKEND reflects CLI --backend via os.environ, not direct assignment."""
+        with patch('sys.argv', ['memorygraph', '--backend', 'neo4j']):
+            mock_run.side_effect = KeyboardInterrupt()
+
+            with pytest.raises(SystemExit):
+                main()
+
+            # Config should read from os.environ dynamically
+            assert Config.BACKEND == 'neo4j'
+            # The env var is the sole source — no direct Config assignment
+            assert os.environ['MEMORY_BACKEND'] == 'neo4j'
+
+    @patch('memorygraph.cli.server_main', new_callable=AsyncMock)
+    @patch('asyncio.run')
+    @patch.dict(os.environ, {}, clear=True)
+    def test_profile_arg_propagates_through_config(self, mock_run, mock_server):
+        """Config.TOOL_PROFILE reflects CLI --profile via os.environ."""
+        with patch('sys.argv', ['memorygraph', '--profile', 'extended']):
+            mock_run.side_effect = KeyboardInterrupt()
+
+            with pytest.raises(SystemExit):
+                main()
+
+            assert Config.TOOL_PROFILE == 'extended'
+            assert os.environ['MEMORY_TOOL_PROFILE'] == 'extended'
+
+    @patch('memorygraph.cli.server_main', new_callable=AsyncMock)
+    @patch('asyncio.run')
+    @patch.dict(os.environ, {}, clear=True)
+    def test_log_level_arg_propagates_through_config(self, mock_run, mock_server):
+        """Config.LOG_LEVEL reflects CLI --log-level via os.environ."""
+        with patch('sys.argv', ['memorygraph', '--log-level', 'DEBUG']):
+            mock_run.side_effect = KeyboardInterrupt()
+
+            with pytest.raises(SystemExit):
+                main()
+
+            assert Config.LOG_LEVEL == 'DEBUG'
+            assert os.environ['MEMORY_LOG_LEVEL'] == 'DEBUG'
+
+
+class TestHandleMigrateUsesConfig:
+    """Verify handle_migrate reads API key from Config, not os.environ directly."""
+
+    @pytest.mark.asyncio
+    @patch.dict(os.environ, {'MEMORYGRAPH_API_KEY': 'cfg-test-key'}, clear=True)
+    @patch('memorygraph.migration.manager.MigrationManager')
+    async def test_migrate_cloud_reads_api_key_from_config(self, mock_manager_class):
+        """handle_migrate uses Config.MEMORYGRAPH_API_KEY for cloud backend."""
+        from unittest.mock import MagicMock
+
+        mock_manager = MagicMock()
+        mock_manager_class.return_value = mock_manager
+
+        mock_result = MagicMock()
+        mock_result.dry_run = False
+        mock_result.success = True
+        mock_result.imported_memories = 1
+        mock_result.imported_relationships = 0
+        mock_result.skipped_memories = 0
+        mock_result.duration_seconds = 0.1
+        mock_result.verification_result = None
+        mock_manager.migrate = AsyncMock(return_value=mock_result)
+
+        args = MagicMock()
+        args.source_backend = 'sqlite'
+        args.from_path = None
+        args.from_uri = None
+        args.target_backend = 'cloud'
+        args.to_path = None
+        args.to_uri = None
+        args.dry_run = False
+        args.verbose = False
+        args.skip_duplicates = True
+        args.no_verify = False
+
+        await handle_migrate(args)
+
+        # Verify the password passed to BackendConfig came from Config
+        call_args = mock_manager.migrate.call_args
+        target_config = call_args[0][1]  # second positional arg
+        assert target_config.password == 'cfg-test-key'
+
+    @pytest.mark.asyncio
+    @patch.dict(os.environ, {}, clear=True)
+    async def test_migrate_cloud_missing_api_key_exits(self):
+        """handle_migrate exits when Config.MEMORYGRAPH_API_KEY is None."""
+        from unittest.mock import MagicMock
+
+        args = MagicMock()
+        args.source_backend = 'sqlite'
+        args.from_path = None
+        args.from_uri = None
+        args.target_backend = 'cloud'
+        args.to_path = None
+        args.to_uri = None
+        args.dry_run = False
+        args.verbose = False
+        args.skip_duplicates = True
+        args.no_verify = False
+
+        with pytest.raises(SystemExit) as exc_info:
+            await handle_migrate(args)
+
+        assert exc_info.value.code == 1
