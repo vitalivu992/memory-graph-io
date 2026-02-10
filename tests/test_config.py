@@ -6,11 +6,11 @@ ensuring proper environment variable handling and backward compatibility.
 """
 
 import os
-import pytest
 from unittest import mock
 
-from memorygraph.config import Config, _EnvVar
+import pytest
 
+from memorygraph.config import Config, _EnvVar
 from tests.conftest import patch_config
 
 
@@ -43,6 +43,7 @@ class TestConfigMultiTenancy:
         """Test enabling multi-tenant mode via environment variable."""
         # Need to reload the Config class to pick up new env var
         from importlib import reload
+
         import memorygraph.config
         reload(memorygraph.config)
         from memorygraph.config import Config as ReloadedConfig
@@ -54,6 +55,7 @@ class TestConfigMultiTenancy:
     def test_custom_default_tenant(self):
         """Test setting custom default tenant via environment variable."""
         from importlib import reload
+
         import memorygraph.config
         reload(memorygraph.config)
         from memorygraph.config import Config as ReloadedConfig
@@ -65,6 +67,7 @@ class TestConfigMultiTenancy:
     def test_require_auth_enabled(self):
         """Test enabling authentication requirement via environment variable."""
         from importlib import reload
+
         import memorygraph.config
         reload(memorygraph.config)
         from memorygraph.config import Config as ReloadedConfig
@@ -79,6 +82,7 @@ class TestConfigMultiTenancy:
     def test_jwt_configuration(self):
         """Test JWT authentication configuration."""
         from importlib import reload
+
         import memorygraph.config
         reload(memorygraph.config)
         from memorygraph.config import Config as ReloadedConfig
@@ -91,6 +95,7 @@ class TestConfigMultiTenancy:
     def test_audit_log_enabled(self):
         """Test enabling audit logging via environment variable."""
         from importlib import reload
+
         import memorygraph.config
         reload(memorygraph.config)
         from memorygraph.config import Config as ReloadedConfig
@@ -168,6 +173,7 @@ class TestConfigValidation:
     def test_false_string_parsed_correctly(self):
         """Test that 'false' string is parsed as boolean False."""
         from importlib import reload
+
         import memorygraph.config
         reload(memorygraph.config)
         from memorygraph.config import Config as ReloadedConfig
@@ -178,6 +184,7 @@ class TestConfigValidation:
     def test_false_case_insensitive(self):
         """Test that 'False' (capitalized) is parsed correctly."""
         from importlib import reload
+
         import memorygraph.config
         reload(memorygraph.config)
         from memorygraph.config import Config as ReloadedConfig
@@ -188,6 +195,7 @@ class TestConfigValidation:
     def test_true_case_insensitive(self):
         """Test that 'TRUE' (uppercase) is parsed correctly."""
         from importlib import reload
+
         import memorygraph.config
         reload(memorygraph.config)
         from memorygraph.config import Config as ReloadedConfig
@@ -198,6 +206,7 @@ class TestConfigValidation:
     def test_invalid_boolean_defaults_to_false(self):
         """Test that invalid boolean string defaults to False."""
         from importlib import reload
+
         import memorygraph.config
         reload(memorygraph.config)
         from memorygraph.config import Config as ReloadedConfig
