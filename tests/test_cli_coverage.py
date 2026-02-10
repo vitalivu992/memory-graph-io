@@ -10,23 +10,18 @@ Tests cover:
 - Async command handlers
 """
 
-import os
-import sys
 import json
-import asyncio
-from io import StringIO
-from unittest.mock import patch, MagicMock, AsyncMock, mock_open
-from pathlib import Path
+import os
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from memorygraph import __version__
 from memorygraph.cli import (
-    main,
     handle_export,
     handle_import,
     handle_migrate,
     handle_migrate_multitenant,
+    main,
     perform_health_check,
     print_config_summary,
 )
@@ -563,7 +558,7 @@ class TestHealthCheckDetailed:
     def test_health_check_json_output(self, capsys):
         """Test health check with JSON output."""
         with patch('sys.argv', ['memorygraph', '--health', '--health-json']):
-            with pytest.raises(SystemExit) as exc_info:
+            with pytest.raises(SystemExit):
                 main()
 
             captured = capsys.readouterr()

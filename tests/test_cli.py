@@ -11,9 +11,8 @@ Tests cover:
 """
 
 import os
-import sys
 from io import StringIO
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
