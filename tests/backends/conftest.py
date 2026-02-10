@@ -6,9 +6,9 @@ especially for Memgraph and Neo4j-based backends,
 and shared helpers for FalkorDB mock result construction.
 """
 
-import pytest
 from unittest.mock import AsyncMock, Mock
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # FalkorDB shared mock helpers
