@@ -26,28 +26,22 @@ class BackendType(Enum):
     AUTO = "auto"
 
 
-# Tool profile definitions
-# Core mode: Essential tools for daily use (9 tools)
-# Extended mode: Core + advanced analytics (12 tools)
 _CORE_TOOLS = [
-    # Essential memory operations (5 tools)
     "store_memory",
     "get_memory",
     "search_memories",
     "update_memory",
     "delete_memory",
-    # Essential relationship operations (2 tools)
     "create_relationship",
     "get_related_memories",
-    # Discovery and navigation (2 tools)
-    "recall_memories",  # Primary search with fuzzy matching
-    "get_recent_activity",  # Session briefing
+    "recall_memories",
+    "get_recent_activity",
 ]
 
 _EXTENDED_EXTRA_TOOLS = [
-    "get_memory_statistics",  # Database stats
-    "search_relationships_by_context",  # Complex relationship queries
-    "contextual_search",  # Scoped search within related memories
+    "get_memory_statistics",
+    "search_relationships_by_context",
+    "contextual_search",
 ]
 
 TOOL_PROFILES = {
@@ -108,7 +102,6 @@ class _EnvVar:
         return f"_EnvVar({', '.join(repr(n) for n in self.env_names)}, default={self.default!r})"
 
 
-# Pre-compute default paths once (home directory doesn't change during process)
 _DEFAULT_DB_PATH = os.path.expanduser("~/.memorygraph/memory.db")
 _DEFAULT_FALKORDBLITE_PATH = os.path.expanduser("~/.memorygraph/falkordblite.db")
 _DEFAULT_LADYBUGDB_PATH = os.path.expanduser("~/.memorygraph/ladybugdb.db")
@@ -171,86 +164,64 @@ class Config:
             MEMORY_ENABLE_AUDIT_LOG: Log all access events [default: false]
     """
 
-    # Backend Selection
     BACKEND = _EnvVar("MEMORY_BACKEND", default="sqlite")
 
-    # Neo4j Configuration
     NEO4J_URI = _EnvVar("MEMORY_NEO4J_URI", "NEO4J_URI", default="bolt://localhost:7687")
     NEO4J_USER = _EnvVar("MEMORY_NEO4J_USER", "NEO4J_USER", default="neo4j")
     NEO4J_PASSWORD = _EnvVar("MEMORY_NEO4J_PASSWORD", "NEO4J_PASSWORD", default=None)
     NEO4J_DATABASE = _EnvVar("MEMORY_NEO4J_DATABASE", default="neo4j")
 
-    # Memgraph Configuration
     MEMGRAPH_URI = _EnvVar("MEMORY_MEMGRAPH_URI", default="bolt://localhost:7687")
     MEMGRAPH_USER = _EnvVar("MEMORY_MEMGRAPH_USER", default="")
     MEMGRAPH_PASSWORD = _EnvVar("MEMORY_MEMGRAPH_PASSWORD", default="")
 
-    # SQLite Configuration
     SQLITE_PATH = _EnvVar("MEMORY_SQLITE_PATH", default=_DEFAULT_DB_PATH)
 
-    # Turso Configuration
     TURSO_PATH = _EnvVar("MEMORY_TURSO_PATH", default=_DEFAULT_DB_PATH)
     TURSO_DATABASE_URL = _EnvVar("TURSO_DATABASE_URL", default=None)
     TURSO_AUTH_TOKEN = _EnvVar("TURSO_AUTH_TOKEN", default=None)
 
-    # Cloud Configuration
     MEMORYGRAPH_API_KEY = _EnvVar("MEMORYGRAPH_API_KEY", default=None)
     MEMORYGRAPH_API_URL = _EnvVar("MEMORYGRAPH_API_URL", default="https://graph-api.memorygraph.dev")
     MEMORYGRAPH_TIMEOUT = _EnvVar("MEMORYGRAPH_TIMEOUT", default=30, cast=int)
 
-    # Cloud Backend Retry Configuration
     CLOUD_MAX_RETRIES = _EnvVar("MEMORYGRAPH_MAX_RETRIES", default=3, cast=int)
     CLOUD_RETRY_BACKOFF_BASE = _EnvVar("MEMORYGRAPH_RETRY_BACKOFF", default=1.0, cast=float)
     CLOUD_CIRCUIT_BREAKER_THRESHOLD = _EnvVar("MEMORYGRAPH_CB_THRESHOLD", default=5, cast=int)
     CLOUD_CIRCUIT_BREAKER_TIMEOUT = _EnvVar("MEMORYGRAPH_CB_TIMEOUT", default=60.0, cast=float)
 
-    # FalkorDB Configuration
     FALKORDB_HOST = _EnvVar("MEMORY_FALKORDB_HOST", "FALKORDB_HOST", default="localhost")
     FALKORDB_PORT = _EnvVar("MEMORY_FALKORDB_PORT", "FALKORDB_PORT", default=6379, cast=int)
     FALKORDB_PASSWORD = _EnvVar("MEMORY_FALKORDB_PASSWORD", "FALKORDB_PASSWORD", default=None)
 
-    # FalkorDBLite Configuration
     FALKORDBLITE_PATH = _EnvVar("MEMORY_FALKORDBLITE_PATH", "FALKORDBLITE_PATH", default=_DEFAULT_FALKORDBLITE_PATH)
 
-    # LadybugDB Configuration
     LADYBUGDB_PATH = _EnvVar("MEMORY_LADYBUGDB_PATH", "LADYBUGDB_PATH", default=_DEFAULT_LADYBUGDB_PATH)
 
-    # Tool Profile Configuration
     TOOL_PROFILE = _EnvVar("MEMORY_TOOL_PROFILE", default="core")
 
-    # Logging Configuration
     LOG_LEVEL = _EnvVar("MEMORY_LOG_LEVEL", default="INFO")
 
-    # Feature Flags
     AUTO_EXTRACT_ENTITIES = _EnvVar("MEMORY_AUTO_EXTRACT_ENTITIES", default=True, cast=bool)
     SESSION_BRIEFING = _EnvVar("MEMORY_SESSION_BRIEFING", default=True, cast=bool)
     BRIEFING_VERBOSITY = _EnvVar("MEMORY_BRIEFING_VERBOSITY", default="standard")
     BRIEFING_RECENCY_DAYS = _EnvVar("MEMORY_BRIEFING_RECENCY_DAYS", default=7, cast=int)
 
-    # Relationship Configuration
     ALLOW_RELATIONSHIP_CYCLES = _EnvVar("MEMORY_ALLOW_CYCLES", default=False, cast=bool)
 
-    # Multi-Tenancy Configuration (Phase 1)
     MULTI_TENANT_MODE = _EnvVar("MEMORY_MULTI_TENANT_MODE", default=False, cast=bool)
     DEFAULT_TENANT = _EnvVar("MEMORY_DEFAULT_TENANT", default="default")
     REQUIRE_AUTH = _EnvVar("MEMORY_REQUIRE_AUTH", default=False, cast=bool)
 
-    # Authentication Configuration (Future Phase 3)
     AUTH_PROVIDER = _EnvVar("MEMORY_AUTH_PROVIDER", default="none")
     JWT_SECRET = _EnvVar("MEMORY_JWT_SECRET", default=None)
     JWT_ALGORITHM = _EnvVar("MEMORY_JWT_ALGORITHM", default="HS256")
 
-    # Audit Configuration (Future Phase 4)
     ENABLE_AUDIT_LOG = _EnvVar("MEMORY_ENABLE_AUDIT_LOG", default=False, cast=bool)
 
     @classmethod
     def get_backend_type(cls) -> BackendType:
-        """
-        Get the configured backend type.
-
-        Returns:
-            BackendType enum value
-        """
+        """Get the configured backend type, falling back to AUTO for unknown values."""
         backend_str = cls.BACKEND.lower()
         try:
             return BackendType(backend_str)
@@ -268,11 +239,8 @@ class Config:
         caller explicitly configured it.
         """
         descriptor = cls.__dict__.get(attr_name)
-        # Use duck typing (hasattr) instead of isinstance to survive
-        # module reloads that create a new _EnvVar class.
         if hasattr(descriptor, "is_set"):
             return descriptor.is_set()
-        # Direct assignment means it was explicitly configured
         return attr_name in cls.__dict__
 
     @classmethod
@@ -287,37 +255,22 @@ class Config:
 
     @classmethod
     def is_multi_tenant_mode(cls) -> bool:
-        """
-        Check if multi-tenant mode is enabled.
-
-        Returns:
-            True if MEMORY_MULTI_TENANT_MODE=true, False otherwise
-        """
+        """Check if multi-tenant mode is enabled."""
         return cls.MULTI_TENANT_MODE
 
     @classmethod
     def get_default_tenant(cls) -> str:
-        """
-        Get default tenant ID for single-tenant mode.
-
-        Returns:
-            The default tenant identifier
-        """
+        """Get default tenant ID for single-tenant mode."""
         return cls.DEFAULT_TENANT
 
     @classmethod
     def get_enabled_tools(cls) -> Optional[List[str]]:
-        """
-        Get the list of enabled tools based on the configured profile.
+        """Get the list of enabled tools based on the configured profile.
 
         Legacy profile names (lite, standard, full) are mapped to their
         modern equivalents. Unrecognized profiles fall back to core.
-
-        Returns:
-            List of tool names to enable, or None to enable all tools
         """
         profile = cls.TOOL_PROFILE.lower()
-        # Map legacy profiles to new ones
         legacy_map = {
             "lite": "core",
             "standard": "extended",
@@ -328,12 +281,7 @@ class Config:
 
     @classmethod
     def get_config_summary(cls) -> dict:
-        """
-        Get a summary of current configuration (without sensitive data).
-
-        Returns:
-            Dictionary with configuration summary
-        """
+        """Get a summary of current configuration (without sensitive data)."""
         return {
             "backend": cls.BACKEND,
             "neo4j": {
@@ -391,12 +339,6 @@ class Config:
         }
 
 
-# Convenience function for getting config
 def get_config() -> Config:
-    """
-    Get the global configuration instance.
-
-    Returns:
-        Config instance
-    """
+    """Get the global configuration instance."""
     return Config
