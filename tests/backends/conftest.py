@@ -1,5 +1,6 @@
-"""Shared fixtures for backend tests."""
+"""Shared fixtures and helpers for backend tests."""
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -19,6 +20,47 @@ def make_falkordb_result(header_names: list, rows: list) -> Mock:
     result.header = [[1, name] for name in header_names]
     result.result_set = rows
     return result
+
+
+def make_memory_node(
+    id: str,
+    *,
+    type: str = "solution",
+    title: str = "Test",
+    content: str = "Content",
+    tags: list | None = None,
+    importance: float = 0.8,
+    confidence: float = 0.9,
+    summary: str | None = None,
+) -> Mock:
+    """Create a mock FalkorDB node with memory properties."""
+    now = datetime.now(timezone.utc).isoformat()
+    return make_falkordb_node({
+        "id": id,
+        "type": type,
+        "title": title,
+        "content": content,
+        "summary": summary,
+        "tags": tags or [],
+        "importance": importance,
+        "confidence": confidence,
+        "created_at": now,
+        "updated_at": now,
+        "usage_count": 0,
+    })
+
+
+def make_connected_backend(backend_cls, **kwargs):
+    """Create a pre-connected backend with mocked client and graph.
+
+    For FalkorDBBackend, pass host/port kwargs.
+    For FalkorDBLiteBackend, pass db_path kwarg.
+    """
+    backend = backend_cls(**kwargs)
+    backend.client = Mock()
+    backend.graph = Mock()
+    backend._connected = True
+    return backend
 
 
 @pytest.fixture

@@ -131,7 +131,8 @@ class TestFalkorDBQuery:
             await backend.execute_query("MATCH (n) RETURN n")
 
     @pytest.mark.asyncio
-    async def test_execute_query_dict_passthrough(self):
+    async def test_execute_query_dict_row_bypasses_convert(self):
+        """Dict rows in result_set are passed through without _convert_falkordb_value."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
@@ -146,17 +147,15 @@ class TestFalkorDBQuery:
             backend = FalkorDBBackend(host='localhost', port=6379)
             await backend.connect()
 
-            result = await backend.execute_query(
-                "RETURN 'test' as id",
-                write=False
-            )
+            with patch.object(
+                FalkorDBBackend, '_convert_falkordb_value', wraps=FalkorDBBackend._convert_falkordb_value
+            ) as mock_convert:
+                result = await backend.execute_query("RETURN 'test' as id", write=False)
 
             mock_graph.query.assert_called_once()
-            call_args = mock_graph.query.call_args
-            assert "RETURN 'test' as id" in call_args[0][0]
-
-            assert len(result) == 1
-            assert result[0]["id"] == "789"
+            assert "RETURN 'test' as id" in mock_graph.query.call_args[0][0]
+            assert result == [{"id": "789"}]
+            mock_convert.assert_not_called()
 
 
 class TestFalkorDBSchema:

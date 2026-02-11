@@ -2,7 +2,6 @@
 
 import sys
 import uuid
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
@@ -24,28 +23,9 @@ from memorygraph.models import (
 )
 from tests.backends.conftest import make_falkordb_node as _make_node
 from tests.backends.conftest import make_falkordb_result as _make_result
+from tests.backends.conftest import make_memory_node as _make_memory_node
 
 TEST_DB_PATH = "/tmp/test.db"
-
-
-def _make_memory_node(id: str, *, type: str = "solution", title: str = "Test",
-                      content: str = "Content", tags: list | None = None,
-                      importance: float = 0.8, confidence: float = 0.9,
-                      summary: str | None = None) -> Mock:
-    now = datetime.now(timezone.utc).isoformat()
-    return _make_node({
-        "id": id,
-        "type": type,
-        "title": title,
-        "content": content,
-        "summary": summary,
-        "tags": tags or [],
-        "importance": importance,
-        "confidence": confidence,
-        "created_at": now,
-        "updated_at": now,
-        "usage_count": 0,
-    })
 
 
 def _setup_mock(header_names=None, rows=None):

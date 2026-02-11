@@ -19,30 +19,9 @@ from memorygraph.models import (
     SearchQuery,
     ValidationError,
 )
-
-
-def _make_node(properties: dict) -> Mock:
-    node = Mock()
-    node.properties = properties
-    return node
-
-
-def _make_result(header_names: list, rows: list) -> Mock:
-    result = Mock()
-    result.header = [[1, name] for name in header_names]
-    result.result_set = rows
-    return result
-
-
-def _make_connected_backend(cls=FalkorDBBackend, **kwargs):
-    if cls == FalkorDBBackend:
-        backend = cls(host="localhost", port=6379, **kwargs)
-    else:
-        backend = cls(db_path="/tmp/test.db", **kwargs)
-    backend.client = Mock()
-    backend.graph = Mock()
-    backend._connected = True
-    return backend
+from tests.backends.conftest import make_connected_backend
+from tests.backends.conftest import make_falkordb_node as _make_node
+from tests.backends.conftest import make_falkordb_result as _make_result
 
 
 class TestBaseFalkorDBInheritance:
@@ -79,7 +58,7 @@ class TestSharedDisconnect:
 
     @pytest.mark.asyncio
     async def test_disconnect_clears_state(self):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         assert backend._connected is True
 
         await backend.disconnect()
@@ -109,7 +88,7 @@ class TestSharedExecuteQuery:
 
     @pytest.mark.asyncio
     async def test_query_exception_wraps_in_connection_error(self):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         backend.graph.query.side_effect = RuntimeError("DB crashed")
 
         with pytest.raises(DatabaseConnectionError, match="Query execution failed"):
@@ -117,7 +96,7 @@ class TestSharedExecuteQuery:
 
     @pytest.mark.asyncio
     async def test_empty_result_set(self):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         result = Mock()
         result.result_set = []
         result.header = []
@@ -127,14 +106,14 @@ class TestSharedExecuteQuery:
 
     @pytest.mark.asyncio
     async def test_no_result_set_attr(self):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         backend.graph.query.return_value = Mock(spec=[])
 
         assert await backend.execute_query("MATCH (n) RETURN n") == []
 
     @pytest.mark.asyncio
     async def test_result_with_node(self):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         node = _make_node({"id": "abc", "title": "Test"})
         backend.graph.query.return_value = _make_result(["m"], [[node]])
 
@@ -144,7 +123,7 @@ class TestSharedExecuteQuery:
 
     @pytest.mark.asyncio
     async def test_result_with_scalar(self):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         backend.graph.query.return_value = _make_result(["count"], [[42]])
 
         records = await backend.execute_query("RETURN 42 as count")
@@ -152,7 +131,7 @@ class TestSharedExecuteQuery:
 
     @pytest.mark.asyncio
     async def test_result_with_dict_row(self):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         result = Mock()
         result.header = [[1, "id"]]
         result.result_set = [{"id": "xyz"}]
@@ -164,7 +143,7 @@ class TestSharedExecuteQuery:
     @pytest.mark.asyncio
     async def test_header_with_plain_string(self):
         """Plain string headers (not [type, name] pairs) are handled correctly."""
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         result = Mock()
         result.header = ["col1"]
         result.result_set = [["val1"]]
@@ -190,7 +169,7 @@ class TestSharedCRUD:
 
     @pytest.mark.asyncio
     async def test_store_memory_assigns_id_if_missing(self):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         generated_id = str(uuid.uuid4())
         backend.graph.query.return_value = _make_result(["id"], [[generated_id]])
 
@@ -206,7 +185,7 @@ class TestSharedCRUD:
 
     @pytest.mark.asyncio
     async def test_store_memory_empty_result_raises(self, memory):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         result = Mock()
         result.result_set = []
         result.header = []
@@ -217,7 +196,7 @@ class TestSharedCRUD:
 
     @pytest.mark.asyncio
     async def test_get_memory_returns_none_when_not_found(self):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         result = Mock()
         result.result_set = []
         result.header = []
@@ -227,7 +206,7 @@ class TestSharedCRUD:
 
     @pytest.mark.asyncio
     async def test_update_memory_without_id_raises(self):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         memory = Memory(
             type=MemoryType.PROBLEM,
             title="No ID",
@@ -240,7 +219,7 @@ class TestSharedCRUD:
 
     @pytest.mark.asyncio
     async def test_delete_memory_returns_false_when_not_found(self):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         result_empty = Mock()
         result_empty.result_set = []
         result_empty.header = []
@@ -251,7 +230,7 @@ class TestSharedCRUD:
 
     @pytest.mark.asyncio
     async def test_delete_memory_returns_true_when_found(self):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
 
         exists_result = _make_result(["id"], [["mem-123"]])
         delete_result = Mock()
@@ -265,7 +244,7 @@ class TestSharedCRUD:
     @pytest.mark.asyncio
     async def test_delete_memory_no_count_after_detach_delete(self):
         """Delete query must use DETACH DELETE without COUNT."""
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
 
         exists_result = _make_result(["id"], [["mem-123"]])
         delete_result = Mock()
@@ -284,7 +263,7 @@ class TestSharedRelationships:
 
     @pytest.mark.asyncio
     async def test_create_relationship_empty_result_raises(self):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         result = Mock()
         result.result_set = []
         result.header = []
@@ -299,7 +278,7 @@ class TestSharedRelationships:
 
     @pytest.mark.asyncio
     async def test_create_relationship_default_properties(self):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         rel_id = str(uuid.uuid4())
         backend.graph.query.return_value = _make_result(["id"], [[rel_id]])
 
@@ -312,7 +291,7 @@ class TestSharedRelationships:
 
     @pytest.mark.asyncio
     async def test_get_related_memories_empty(self):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         result = Mock()
         result.result_set = []
         result.header = []
@@ -322,7 +301,7 @@ class TestSharedRelationships:
 
     @pytest.mark.asyncio
     async def test_get_related_memories_with_type_filter(self):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         node = _make_node({
             "id": "mem2",
             "type": "solution",
@@ -348,7 +327,7 @@ class TestSharedRelationships:
     @pytest.mark.asyncio
     async def test_get_related_memories_invalid_rel_type_defaults(self):
         """Unknown relationship type defaults to RELATED_TO."""
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         node = _make_node({
             "id": "mem2",
             "type": "solution",
@@ -376,7 +355,7 @@ class TestSharedSearch:
 
     @pytest.mark.asyncio
     async def test_search_with_all_filters(self):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         node = _make_node({
             "id": "s1",
             "type": "solution",
@@ -403,7 +382,7 @@ class TestSharedSearch:
 
     @pytest.mark.asyncio
     async def test_search_no_filters(self):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         result = Mock()
         result.result_set = []
         result.header = []
@@ -417,7 +396,7 @@ class TestSharedStatistics:
     @pytest.mark.asyncio
     async def test_statistics_handles_query_failure(self):
         """Statistics should return None values on query failure."""
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         backend.graph.query.side_effect = Exception("DB error")
 
         stats = await backend.get_memory_statistics()
@@ -526,7 +505,7 @@ class TestSharedSchemaMultitenant:
 
     @pytest.mark.asyncio
     async def test_multitenant_indexes_created(self):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         queries = []
 
         async def mock_execute(query, parameters=None, write=False):
@@ -546,7 +525,7 @@ class TestSharedSchemaMultitenant:
 
     @pytest.mark.asyncio
     async def test_no_multitenant_indexes_without_mode(self):
-        backend = _make_connected_backend(FalkorDBBackend)
+        backend = make_connected_backend(FalkorDBBackend, host="localhost", port=6379)
         queries = []
 
         async def mock_execute(query, parameters=None, write=False):
