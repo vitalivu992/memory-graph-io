@@ -23,15 +23,13 @@ After refactoring, backends will read from Config in __init__, making Config
 the single source of truth for all configuration.
 """
 
-import os
-import pytest
 import importlib.util
-from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Any, Dict
+import os
 
-from memorygraph.config import Config
+import pytest
+
 from memorygraph.backends.sqlite_fallback import SQLiteFallbackBackend
-
+from memorygraph.config import Config
 from tests.conftest import patch_config
 
 # Check for optional dependencies
