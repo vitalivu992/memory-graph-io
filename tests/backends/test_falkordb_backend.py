@@ -1,47 +1,32 @@
-"""
-Unit tests for FalkorDB backend implementation.
+"""Unit tests for FalkorDB backend (mocked, no running instance required)."""
 
-These tests use mocked FalkorDB client to verify backend logic without
-requiring a running FalkorDB instance.
-
-Mock results use the real FalkorDB response format:
-  - result.header: list of [ColumnType, column_name] pairs
-  - result.result_set: list of lists (rows of column values)
-  - Node objects have a .properties dict
-"""
+import sys
+import uuid
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
-from unittest.mock import AsyncMock, Mock, patch, MagicMock
-from datetime import datetime, timezone
-import uuid
-import sys
 
-# Mock the falkordb module before importing the backend
 sys.modules['falkordb'] = MagicMock()
 
 from memorygraph.backends.falkordb_backend import FalkorDBBackend
 from memorygraph.models import (
+    DatabaseConnectionError,
     Memory,
     MemoryType,
-    RelationshipType,
     RelationshipProperties,
-    DatabaseConnectionError,
-    SchemaError,
-    ValidationError,
-    RelationshipError,
+    RelationshipType,
+    SearchQuery,
 )
 from tests.backends.conftest import make_falkordb_node as _make_node
 from tests.backends.conftest import make_falkordb_result as _make_result
 
 
 class TestFalkorDBConnection:
-    """Test FalkorDB connection management."""
 
     @pytest.mark.asyncio
     async def test_connect_success(self):
-        """Test successful connection to FalkorDB."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
-            # Mock FalkorDB client
             mock_client = Mock()
             mock_graph = Mock()
             mock_client.select_graph.return_value = mock_graph
@@ -56,9 +41,7 @@ class TestFalkorDBConnection:
 
     @pytest.mark.asyncio
     async def test_connect_failure(self):
-        """Test connection failure handling."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
-            # Simulate connection error
             mock_falkordb_class.side_effect = Exception("Connection refused")
 
             backend = FalkorDBBackend(host='localhost', port=6379)
@@ -68,7 +51,6 @@ class TestFalkorDBConnection:
 
     @pytest.mark.asyncio
     async def test_disconnect(self):
-        """Test disconnection from FalkorDB."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
@@ -82,35 +64,28 @@ class TestFalkorDBConnection:
             assert backend._connected is False
 
     def test_backend_name(self):
-        """Test backend name identifier."""
         backend = FalkorDBBackend(host='localhost', port=6379)
         assert backend.backend_name() == "falkordb"
 
     def test_supports_fulltext_search(self):
-        """Test fulltext search capability reporting."""
         backend = FalkorDBBackend(host='localhost', port=6379)
         assert backend.supports_fulltext_search() is True
 
     def test_supports_transactions(self):
-        """Test transaction support reporting."""
         backend = FalkorDBBackend(host='localhost', port=6379)
         assert backend.supports_transactions() is True
 
 
 class TestFalkorDBQuery:
-    """Test FalkorDB query execution."""
 
     @pytest.mark.asyncio
     async def test_execute_query_read_with_node(self):
-        """Test executing a read query that returns a Node."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
 
-            # Real FalkorDB format: header + list-of-lists with Node objects
             node = _make_node({"id": "123", "title": "Test"})
-            mock_result = _make_result(["n"], [[node]])
-            mock_graph.query.return_value = mock_result
+            mock_graph.query.return_value = _make_result(["n"], [[node]])
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
 
@@ -128,14 +103,11 @@ class TestFalkorDBQuery:
 
     @pytest.mark.asyncio
     async def test_execute_query_write_with_scalar(self):
-        """Test executing a write query that returns scalar values."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
 
-            # Real FalkorDB format: scalar return
-            mock_result = _make_result(["id"], [["456"]])
-            mock_graph.query.return_value = mock_result
+            mock_graph.query.return_value = _make_result(["id"], [["456"]])
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
 
@@ -153,7 +125,6 @@ class TestFalkorDBQuery:
 
     @pytest.mark.asyncio
     async def test_execute_query_not_connected(self):
-        """Test query execution when not connected."""
         backend = FalkorDBBackend(host='localhost', port=6379)
 
         with pytest.raises(DatabaseConnectionError, match="(?i)not connected"):
@@ -161,12 +132,10 @@ class TestFalkorDBQuery:
 
     @pytest.mark.asyncio
     async def test_execute_query_dict_passthrough(self):
-        """Test that dict results (if client returns them) pass through and query is called correctly."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
 
-            # Some client versions might return dicts directly
             mock_result = Mock()
             mock_result.header = [[1, "id"]]
             mock_result.result_set = [{"id": "789"}]
@@ -182,7 +151,6 @@ class TestFalkorDBQuery:
                 write=False
             )
 
-            # Verify the graph was queried with the correct Cypher
             mock_graph.query.assert_called_once()
             call_args = mock_graph.query.call_args
             assert "RETURN 'test' as id" in call_args[0][0]
@@ -192,11 +160,9 @@ class TestFalkorDBQuery:
 
 
 class TestFalkorDBSchema:
-    """Test schema initialization."""
 
     @pytest.mark.asyncio
     async def test_initialize_schema(self):
-        """Test schema creation with constraints and indexes."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
@@ -206,21 +172,16 @@ class TestFalkorDBSchema:
             backend = FalkorDBBackend(host='localhost', port=6379)
             await backend.connect()
 
-            # Mock query execution to track calls
             backend.execute_query = AsyncMock()
-
             await backend.initialize_schema()
 
-            # Should execute multiple constraint and index creation queries
-            assert backend.execute_query.call_count >= 2  # At least some schema queries
+            assert backend.execute_query.call_count >= 2
 
 
 class TestFalkorDBMemoryOperations:
-    """Test memory CRUD operations."""
 
     @pytest.fixture
     def sample_memory(self):
-        """Create a sample memory for testing."""
         return Memory(
             id=str(uuid.uuid4()),
             type=MemoryType.SOLUTION,
@@ -233,14 +194,11 @@ class TestFalkorDBMemoryOperations:
 
     @pytest.mark.asyncio
     async def test_store_memory(self, sample_memory):
-        """Test storing a memory."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
 
-            # Real format: scalar return "RETURN m.id as id"
-            mock_result = _make_result(["id"], [[sample_memory.id]])
-            mock_graph.query.return_value = mock_result
+            mock_graph.query.return_value = _make_result(["id"], [[sample_memory.id]])
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
 
@@ -253,12 +211,10 @@ class TestFalkorDBMemoryOperations:
 
     @pytest.mark.asyncio
     async def test_get_memory(self, sample_memory):
-        """Test retrieving a memory by ID."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
 
-            # Real format: Node return "RETURN m"
             node = _make_node({
                 "id": sample_memory.id,
                 "type": "solution",
@@ -272,8 +228,7 @@ class TestFalkorDBMemoryOperations:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
                 "usage_count": 0
             })
-            mock_result = _make_result(["m"], [[node]])
-            mock_graph.query.return_value = mock_result
+            mock_graph.query.return_value = _make_result(["m"], [[node]])
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
 
@@ -288,7 +243,6 @@ class TestFalkorDBMemoryOperations:
 
     @pytest.mark.asyncio
     async def test_get_memory_not_found(self):
-        """Test retrieving a non-existent memory."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
@@ -308,14 +262,11 @@ class TestFalkorDBMemoryOperations:
 
     @pytest.mark.asyncio
     async def test_update_memory(self, sample_memory):
-        """Test updating an existing memory."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
 
-            # Real format: scalar return "RETURN m.id as id"
-            mock_result = _make_result(["id"], [[sample_memory.id]])
-            mock_graph.query.return_value = mock_result
+            mock_graph.query.return_value = _make_result(["id"], [[sample_memory.id]])
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
 
@@ -329,14 +280,11 @@ class TestFalkorDBMemoryOperations:
 
     @pytest.mark.asyncio
     async def test_delete_memory(self, sample_memory):
-        """Test deleting a memory."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
 
-            # First call: exists check returns the memory id
             exists_result = _make_result(["id"], [[sample_memory.id]])
-            # Second call: DETACH DELETE returns empty
             delete_result = Mock()
             delete_result.result_set = []
             delete_result.header = []
@@ -353,19 +301,15 @@ class TestFalkorDBMemoryOperations:
 
 
 class TestFalkorDBRelationships:
-    """Test relationship operations."""
 
     @pytest.mark.asyncio
     async def test_create_relationship(self):
-        """Test creating a relationship between memories."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
             rel_id = str(uuid.uuid4())
 
-            # Real format: scalar return "RETURN r.id as id"
-            mock_result = _make_result(["id"], [[rel_id]])
-            mock_graph.query.return_value = mock_result
+            mock_graph.query.return_value = _make_result(["id"], [[rel_id]])
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
 
@@ -384,13 +328,10 @@ class TestFalkorDBRelationships:
 
     @pytest.mark.asyncio
     async def test_get_related_memories(self):
-        """Test getting related memories."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
 
-            # Real format: Node + scalars
-            # "RETURN related, type(rel) as rel_type, properties(rel) as rel_props"
             related_node = _make_node({
                 "id": "mem2",
                 "type": "solution",
@@ -408,11 +349,10 @@ class TestFalkorDBRelationships:
                 "confidence": 0.8,
                 "context": "Test context"
             }
-            mock_result = _make_result(
+            mock_graph.query.return_value = _make_result(
                 ["related", "rel_type", "rel_props"],
                 [[related_node, "SOLVES", rel_props]]
             )
-            mock_graph.query.return_value = mock_result
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
 
@@ -428,16 +368,13 @@ class TestFalkorDBRelationships:
 
 
 class TestFalkorDBSearch:
-    """Test search functionality."""
 
     @pytest.mark.asyncio
     async def test_search_memories(self):
-        """Test searching for memories."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
 
-            # Real format: Node return "RETURN m"
             node = _make_node({
                 "id": "search1",
                 "type": "solution",
@@ -450,18 +387,14 @@ class TestFalkorDBSearch:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
                 "usage_count": 0
             })
-            mock_result = _make_result(["m"], [[node]])
-            mock_graph.query.return_value = mock_result
+            mock_graph.query.return_value = _make_result(["m"], [[node]])
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
 
             backend = FalkorDBBackend(host='localhost', port=6379)
             await backend.connect()
 
-            from memorygraph.models import SearchQuery
-            query = SearchQuery(query="timeout")
-
-            results = await backend.search_memories(query)
+            results = await backend.search_memories(SearchQuery(query="timeout"))
 
             assert len(results) == 1
             assert results[0].id == "search1"
@@ -469,18 +402,15 @@ class TestFalkorDBSearch:
 
 
 class TestFalkorDBStatistics:
-    """Test statistics operations."""
 
     @pytest.mark.asyncio
     async def test_get_memory_statistics(self):
-        """Test getting database statistics."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
 
-            # Mock multiple query results using real FalkorDB format
-            # Note: memories_by_type query contains both "m.type" AND "COUNT(m)",
-            # so check for "m.type" first to avoid false match on COUNT(m)
+            # Dispatch based on query content; check "m.type" before "COUNT(m)"
+            # because the by-type query contains both.
             def mock_query_side_effect(query, params=None):
                 if "m.type" in query:
                     return _make_result(
@@ -496,10 +426,7 @@ class TestFalkorDBStatistics:
                 elif "AVG(m.confidence)" in query:
                     return _make_result(["avg_confidence"], [[0.85]])
                 else:
-                    result = Mock()
-                    result.result_set = []
-                    result.header = []
-                    return result
+                    return _make_result([], [])
 
             mock_graph.query.side_effect = mock_query_side_effect
             mock_client.select_graph.return_value = mock_graph
@@ -516,18 +443,14 @@ class TestFalkorDBStatistics:
 
 
 class TestFalkorDBHealthCheck:
-    """Test health check functionality."""
 
     @pytest.mark.asyncio
     async def test_health_check_connected(self):
-        """Test health check when connected."""
         with patch('falkordb.FalkorDB') as mock_falkordb_class:
             mock_client = Mock()
             mock_graph = Mock()
 
-            # Real format: scalar return "RETURN count(m) as count"
-            mock_result = _make_result(["count"], [[10]])
-            mock_graph.query.return_value = mock_result
+            mock_graph.query.return_value = _make_result(["count"], [[10]])
             mock_client.select_graph.return_value = mock_graph
             mock_falkordb_class.return_value = mock_client
 
@@ -542,7 +465,6 @@ class TestFalkorDBHealthCheck:
 
     @pytest.mark.asyncio
     async def test_health_check_not_connected(self):
-        """Test health check when not connected."""
         backend = FalkorDBBackend(host='localhost', port=6379)
 
         health = await backend.health_check()
@@ -552,21 +474,17 @@ class TestFalkorDBHealthCheck:
 
 
 class TestConvertFalkorDBValue:
-    """Test the _convert_falkordb_value helper."""
 
     def test_node_conversion(self):
-        """Test that Node objects are converted to property dicts."""
         node = _make_node({"id": "123", "title": "Test"})
         result = FalkorDBBackend._convert_falkordb_value(node)
         assert result == {"id": "123", "title": "Test"}
 
     def test_scalar_passthrough(self):
-        """Test that scalar values pass through unchanged."""
         assert FalkorDBBackend._convert_falkordb_value("hello") == "hello"
         assert FalkorDBBackend._convert_falkordb_value(42) == 42
         assert FalkorDBBackend._convert_falkordb_value(None) is None
 
     def test_dict_passthrough(self):
-        """Test that plain dicts pass through unchanged."""
         d = {"key": "value"}
         assert FalkorDBBackend._convert_falkordb_value(d) == d
