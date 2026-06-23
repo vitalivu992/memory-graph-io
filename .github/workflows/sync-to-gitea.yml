@@ -1,0 +1,51 @@
+name: Sync to Gitea
+
+# One-way mirror: GitHub → gitea.linhvu.net.
+# Runs on push to master/main, on tags, and on manual trigger (workflow_dispatch).
+# Required repo secrets:
+#   MY_GITEA_TOKEN - Gitea personal access token with `repo` scope
+#   GITEA_OWNER    - user/org on gitea.linhvu.net that owns the mirror
+
+on:
+  push:
+    branches: [master, main]
+    tags: ['*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Mirror to Gitea
+        env:
+          GITEA_TOKEN: ${{ secrets.MY_GITEA_TOKEN }}
+          GITEA_OWNER: ${{ secrets.GITEA_OWNER }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GITEA_TOKEN" ]; then
+            echo "::error::Repository secret MY_GITEA_TOKEN is not set"
+            exit 1
+          fi
+          if [ -z "$GITEA_OWNER" ]; then
+            echo "::error::Repository secret GITEA_OWNER is not set"
+            exit 1
+          fi
+
+          git config --global user.name  "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          REPO_NAME="${GITHUB_REPOSITORY##*/}"
+          git remote add gitea "https://x-access-token:${GITEA_TOKEN}@gitea.linhvu.net/${GITEA_OWNER}/${REPO_NAME}.git"
+
+          echo "Mirroring ${GITHUB_REF_NAME} → gitea.linhvu.net/${GITEA_OWNER}/${REPO_NAME}"
+          # Mirror the current branch (master or main) and all tags.
+          git push --force gitea "${GITHUB_REF_NAME}:${GITHUB_REF_NAME}"
+          git push --force gitea --tags || true
